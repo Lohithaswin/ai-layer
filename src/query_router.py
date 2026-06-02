@@ -170,11 +170,29 @@ def _intent_extra_queries(intent: str, subjects: list[str], search_q: str, histo
         prod_name = product.upper() if product else "product"
         extra.extend(
             [
-                f"{prod_name} installation steps",
-                f"how to install {prod_name} setup install configure",
-                f"{prod_name} deployment guide",
+                f"{search_q} procedure",
+                f"{search_q} steps",
             ]
         )
+        if any(
+            term in q_lower
+            for term in (
+                "install",
+                "installation",
+                "setup",
+                "configure",
+                "configuration",
+                "deploy",
+                "deployment",
+            )
+        ):
+            extra.extend(
+                [
+                    f"{prod_name} installation steps",
+                    f"how to install {prod_name} setup install configure",
+                    f"{prod_name} deployment guide",
+                ]
+            )
 
     elif intent == "architecture":
         for ac in subjects:
@@ -216,9 +234,39 @@ def _infer_product_and_doc_type(
     store = get_vector_store()
     product = resolve_primary_product(question, subjects, history, store.count)
     doc_type: str | None = None
+    q = question.lower()
 
     if intent == "how_to":
-        doc_type = "install_guide"
+        install_terms = (
+            "install",
+            "installation",
+            "configure",
+            "configuration",
+            "setup",
+            "deploy",
+            "deployment",
+            "appsettings",
+            ".config",
+            "service",
+            "server",
+            "path",
+            "poll interval",
+            "restart",
+        )
+        user_manual_terms = (
+            "menu",
+            "window",
+            "screen",
+            "dropdown",
+            "role",
+            "mapping",
+            "whitelist",
+            "password handling",
+        )
+        if any(term in q for term in install_terms) and not any(
+            term in q for term in user_manual_terms
+        ):
+            doc_type = "install_guide"
     elif intent == "field_detail":
         doc_type = "user_manual"
 

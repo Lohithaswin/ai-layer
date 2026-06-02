@@ -9,6 +9,7 @@ from src.config import (
     CONTEXT_FOCUS_MAX_SOURCES,
     HYBRID_DENSE_WEIGHT,
     HYBRID_SPARSE_WEIGHT,
+    MAX_SECTION_PAGES,
     RETRIEVAL_CANDIDATES,
     RRF_K,
     TOP_K,
@@ -176,6 +177,86 @@ def _is_new_section(
         return True
 
     return False
+
+
+def _page_text(
+    chunks: list[dict],
+) -> str:
+
+    seen = set()
+    parts = []
+
+    for chunk in sorted(
+        chunks,
+        key=lambda c: int(c.get("chunk_index", 0)),
+    ):
+
+        text = (
+            chunk.get("parent_text")
+            or chunk.get("text", "")
+        )
+
+        normalized = re.sub(
+            r"\s+",
+            " ",
+            text,
+        ).strip()
+
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            parts.append(text)
+
+    return "\n".join(parts)
+
+
+def _complete_section_from_pages(
+    store: VectorStore,
+    hit: dict,
+    heading: str,
+) -> str | None:
+    """
+    Build a section from the matched page forward.
+
+    Parent chunks can contain only the first part of a long section. This
+    gathers following pages from the same PDF and lets section extraction trim
+    at the next detected heading.
+    """
+
+    source_file = hit.get("source_file")
+    start_page = int(hit.get("page", 0))
+
+    if not source_file or start_page < 1:
+        return None
+
+    page_texts = []
+
+    for page in range(
+        start_page,
+        start_page + MAX_SECTION_PAGES,
+    ):
+
+        chunks = store.get_chunks_for_page(
+            source_file,
+            page,
+        )
+
+        if not chunks:
+            break
+
+        page_body = _page_text(chunks)
+
+        if page_body:
+            page_texts.append(page_body)
+
+    if not page_texts:
+        return None
+
+    combined = "\n".join(page_texts)
+
+    return extract_complete_section(
+        text=combined,
+        heading=heading,
+    )
 
 
 def _expand_adjacent_pages(
@@ -572,7 +653,11 @@ def retrieve(
 
         top_match = matches[0]
 
-        complete_section = extract_complete_section(
+        complete_section = _complete_section_from_pages(
+            store=store,
+            hit=hit,
+            heading=top_match["heading"],
+        ) or extract_complete_section(
             text=body,
             heading=top_match["heading"],
         )

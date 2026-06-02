@@ -428,9 +428,11 @@ export function ChatUI() {
                                     ? `${s.section}`
                                     : s.source_file}
                                 </div>
-                                <div className="source-doc">
-                                  {s.source_file}
-                                </div>
+                                {s.section && (
+                                  <div className="source-doc">
+                                    {s.source_file}
+                                  </div>
+                                )}
                                 <span className="source-meta">
                                   p.{s.page} · {formatRelevance(s.score)}
                                 </span>

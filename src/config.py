@@ -12,8 +12,8 @@ BM25_PATH = Path(os.getenv("BM25_PATH", ROOT / "data" / "bm25_index.pkl"))
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "600"))
-OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "2048"))
+OLLAMA_TIMEOUT = max(float(os.getenv("OLLAMA_TIMEOUT", "900")), 900.0)
+OLLAMA_NUM_PREDICT = max(int(os.getenv("OLLAMA_NUM_PREDICT", "3072")), 3072)
 
 EMBEDDING_MODEL = os.getenv(
     "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
@@ -40,7 +40,7 @@ CHUNK_SIZE = CHILD_CHUNK_SIZE
 CHUNK_OVERLAP = CHILD_CHUNK_OVERLAP
 
 USE_HYBRID_SEARCH = os.getenv("USE_HYBRID_SEARCH", "true").lower() in ("1", "true", "yes")
-USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() in ("1", "true", "yes")
+USE_RERANKER = os.getenv("USE_RERANKER", "false").lower() in ("1", "true", "yes")
 MAX_EXPANDED_QUERIES = int(os.getenv("MAX_EXPANDED_QUERIES", "10"))
 
 # Collapse retrieval to one page/section for procedural questions (scalable, not per-topic)
@@ -57,6 +57,7 @@ MAX_CONTEXT_CHARS = int(
         "25000"
     )
 )
+MAX_SECTION_PAGES = int(os.getenv("MAX_SECTION_PAGES", "25"))
 # Demo/sample PDFs (generic payment/API content — deprioritized for YOUR_PRODUCT questions)
 DEMO_PDF_NAMES = frozenset(
     {

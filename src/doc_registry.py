@@ -91,7 +91,7 @@ def get_active_products() -> set[str]:
     from src.config import DOCS_DIR
     products = set()
     if DOCS_DIR.exists():
-        for path in DOCS_DIR.glob("*.pdf"):
+        for path in DOCS_DIR.rglob("*.pdf"):
             meta = classify_pdf(path)
             if meta.product and meta.product not in ("unknown", "demo"):
                 products.add(meta.product.lower())

@@ -34,6 +34,7 @@ class SourceOut(BaseModel):
     page: int
     excerpt: str
     score: float
+    section: str = ""
     source_type: str = "Local"
     context_before: str = ""
     context_after: str = ""
@@ -62,6 +63,7 @@ def _to_out(resp: ChatResponse) -> ChatResponseOut:
                 page=s.page,
                 excerpt=s.excerpt,
                 score=s.score,
+                section=s.section,
                 source_type=s.source_type,
                 context_before=s.context_before,
                 context_after=s.context_after,
@@ -110,4 +112,3 @@ def list_docs():
 def chat(body: ChatRequest):
     hist = [{"role": m.role, "content": m.content} for m in body.history]
     return _to_out(ask(body.question, history=hist))
-
