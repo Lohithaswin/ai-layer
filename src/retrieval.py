@@ -1,0 +1,693 @@
+"""Metadata-filtered hybrid retrieval + rerank (production pipeline)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from src.bm25_store import get_bm25_store
+from src.config import (
+    CONTEXT_FOCUS_MAX_SOURCES,
+    HYBRID_DENSE_WEIGHT,
+    HYBRID_SPARSE_WEIGHT,
+    RETRIEVAL_CANDIDATES,
+    RRF_K,
+    TOP_K,
+    USE_HYBRID_SEARCH,
+)
+from src.context_focus import focus_hits
+from src.query_router import QueryPlan, route_query
+from src.reranker import rerank
+from src.section_matcher import (
+    boost_section_content,
+    is_configuration_question,
+    find_matching_sections,
+    extract_complete_section,
+)
+from src.vector_store import VectorStore
+
+import re
+
+
+def _chunk_key(hit: dict) -> str:
+    return f"{hit['source_file']}|{hit['page']}|{hit['chunk_index']}"
+
+
+def _rrf_fuse(
+    dense_hits: list[dict],
+    sparse_hits: list[dict],
+    dense_weight: float,
+    sparse_weight: float,
+    k: int = RRF_K,
+) -> list[dict]:
+    scores: dict[str, float] = {}
+    records: dict[str, dict] = {}
+
+    for rank, hit in enumerate(dense_hits):
+        key = _chunk_key(hit)
+        scores[key] = scores.get(key, 0) + dense_weight / (k + rank + 1)
+        records[key] = {**hit, **records.get(key, {})}
+
+    for rank, hit in enumerate(sparse_hits):
+        key = _chunk_key(hit)
+        scores[key] = scores.get(key, 0) + sparse_weight / (k + rank + 1)
+        records[key] = {**hit, **records.get(key, {})}
+
+    fused = []
+
+    for key, score in sorted(
+        scores.items(),
+        key=lambda x: x[1],
+        reverse=True,
+    ):
+        rec = records[key]
+        rec["score"] = score
+        fused.append(rec)
+
+    return fused
+
+
+def _append_hit(
+    hits: list[dict],
+    hit: dict,
+    min_score: float,
+) -> None:
+
+    key = _chunk_key(hit)
+
+    for h in hits:
+
+        if _chunk_key(h) == key:
+            h["score"] = max(
+                h["score"],
+                min_score,
+            )
+            return
+
+    hit["score"] = max(
+        hit.get("score", 0),
+        min_score,
+    )
+
+    hits.append(hit)
+
+
+def _demote_boilerplate(
+    hits: list[dict],
+) -> None:
+
+    for h in hits:
+
+        text = (
+            h.get("parent_text")
+            or h.get("text", "")
+        )
+
+        if (
+            text.count("Installation Guide") >= 2
+            and len(text) < 900
+        ):
+            h["score"] *= 0.7
+
+
+_SEC_NUM_RE = re.compile(
+    r"(?:^|\n)\s*(\d+\.\d+(?:\.\d+)*)\.?\s+[A-Z]",
+    re.M,
+)
+
+
+def _extract_section_numbers(
+    text: str,
+) -> list[str]:
+
+    return _SEC_NUM_RE.findall(text)
+
+
+def _parse_section_num(
+    s: str,
+) -> list[int] | None:
+
+    parts = []
+
+    for p in s.split("."):
+
+        p = p.strip()
+
+        if p.isdigit():
+            parts.append(int(p))
+        else:
+            return None
+
+    return parts if parts else None
+
+
+def _is_new_section(
+    ns: str,
+    current_section: str,
+) -> bool:
+
+    ns_parts = _parse_section_num(ns)
+    curr_parts = _parse_section_num(current_section)
+
+    if not ns_parts or not curr_parts:
+        return False
+
+    min_len = min(
+        len(ns_parts),
+        len(curr_parts),
+    )
+
+    for i in range(min_len - 1):
+
+        if ns_parts[i] != curr_parts[i]:
+            return ns_parts[i] > curr_parts[i]
+
+    last_idx = min_len - 1
+
+    if ns_parts[last_idx] > curr_parts[last_idx]:
+        return True
+
+    elif ns_parts[last_idx] < curr_parts[last_idx]:
+        return False
+
+    if len(ns_parts) > len(curr_parts):
+        return False
+
+    if len(ns_parts) < len(curr_parts):
+        return True
+
+    return False
+
+
+def _expand_adjacent_pages(
+    hits: list[dict],
+    store: VectorStore,
+    expand_further: bool = False,
+) -> None:
+
+    anchors = list(hits)
+
+    for h in anchors:
+
+        h_text = (
+            h.get("parent_text")
+            or h.get("text", "")
+        )
+
+        # -------------------------------------------------
+        # STANDARD PAGE EXPANSION
+        # -------------------------------------------------
+
+        for p in (
+            h["page"] - 1,
+            h["page"] + 1,
+        ):
+
+            if p >= 1:
+
+                for extra in store.get_chunks_for_page(
+                    h["source_file"],
+                    p,
+                ):
+
+                    _append_hit(
+                        hits,
+                        extra,
+                        min_score=h["score"] * 0.97,
+                    )
+
+        # -------------------------------------------------
+        # DYNAMIC SECTION EXPANSION
+        # -------------------------------------------------
+
+        if expand_further:
+
+            anchor_chunks = store.get_chunks_for_page(
+                h["source_file"],
+                h["page"],
+            )
+
+            anchor_text = "\n".join(
+                c.get("parent_text")
+                or c.get("text", "")
+                for c in anchor_chunks
+            )
+
+            sections = _extract_section_numbers(
+                anchor_text
+            )
+
+            current_section = (
+                sections[-1]
+                if sections
+                else None
+            )
+
+            current_p = h["page"]
+
+            for _ in range(15):
+
+                current_p += 1
+
+                page_chunks = store.get_chunks_for_page(
+                    h["source_file"],
+                    current_p,
+                )
+
+                if not page_chunks:
+                    break
+
+                page_text = "\n".join(
+                    c.get("parent_text")
+                    or c.get("text", "")
+                    for c in page_chunks
+                )
+
+                next_sections = _extract_section_numbers(
+                    page_text
+                )
+
+                section_ended = False
+
+                if current_section and next_sections:
+
+                    for ns in next_sections:
+
+                        if _is_new_section(
+                            ns,
+                            current_section,
+                        ):
+                            section_ended = True
+                            break
+
+                meaningful_text = re.sub(
+                    r"\s+",
+                    " ",
+                    page_text,
+                ).strip()
+
+                short_note_page = (
+                    len(meaningful_text) < 1200
+                    and (
+                        "note" in meaningful_text.lower()
+                        or "warning" in meaningful_text.lower()
+                        or "caution" in meaningful_text.lower()
+                    )
+                )
+
+                if section_ended and not short_note_page:
+                    break
+
+                for extra in page_chunks:
+
+                    _append_hit(
+                        hits,
+                        extra,
+                        min_score=h["score"] * 0.97,
+                    )
+
+        # -------------------------------------------------
+        # TABLE CONTINUATION
+        # -------------------------------------------------
+
+        table_like = (
+            "TABLE:" in h_text
+            or "|" in h_text
+            or re.search(
+                r"\bcolumn\b",
+                h_text,
+                re.I,
+            )
+        )
+
+        if table_like:
+
+            current_p = h["page"]
+
+            for _ in range(5):
+
+                current_p += 1
+
+                page_chunks = store.get_chunks_for_page(
+                    h["source_file"],
+                    current_p,
+                )
+
+                if not page_chunks:
+                    break
+
+                page_text = "\n".join(
+                    c.get("parent_text")
+                    or c.get("text", "")
+                    for c in page_chunks
+                )
+
+                next_table_like = (
+                    "TABLE:" in page_text
+                    or "|" in page_text
+                    or re.search(
+                        r"\bcolumn\b",
+                        page_text,
+                        re.I,
+                    )
+                )
+
+                if next_table_like:
+
+                    for extra in page_chunks:
+
+                        _append_hit(
+                            hits,
+                            extra,
+                            min_score=h["score"] * 0.97,
+                        )
+
+                else:
+                    break
+
+
+def _dedupe_by_parent(
+    hits: list[dict],
+    limit: int,
+) -> list[dict]:
+
+    by_parent: dict[str, dict] = {}
+
+    for h in sorted(
+        hits,
+        key=lambda x: x.get("score", 0),
+        reverse=True,
+    ):
+
+        pid = (
+            h.get("parent_id")
+            or _chunk_key(h)
+        )
+
+        if pid not in by_parent:
+            by_parent[pid] = h
+
+    return list(by_parent.values())[:limit]
+
+
+def _bm25_filter_dict(
+    plan: QueryPlan,
+) -> dict[str, Any] | None:
+
+    f: dict[str, Any] = {}
+
+    if plan.product_filter:
+        f["product"] = plan.product_filter
+
+    if plan.doc_type_filter:
+        f["doc_type"] = plan.doc_type_filter
+
+    if plan.exclude_demo:
+        f["is_demo"] = False
+
+    return f or None
+
+
+def hybrid_search(
+    store: VectorStore,
+    query: str,
+    top_k: int = RETRIEVAL_CANDIDATES,
+    where: dict | None = None,
+    bm25_filters: dict | None = None,
+) -> list[dict[str, Any]]:
+
+    dense = store.search(
+        query,
+        top_k=top_k,
+        where=where,
+    )
+
+    if not USE_HYBRID_SEARCH:
+        return dense
+
+    bm25 = get_bm25_store()
+
+    sparse = bm25.search(
+        query,
+        top_k=top_k,
+        filters=bm25_filters,
+    )
+
+    if not sparse and not dense:
+        return []
+
+    if not sparse:
+        return dense
+
+    if not dense:
+        return sparse
+
+    return _rrf_fuse(
+        dense,
+        sparse,
+        HYBRID_DENSE_WEIGHT,
+        HYBRID_SPARSE_WEIGHT,
+    )[:top_k]
+
+
+def retrieve(
+    question: str,
+    store: VectorStore,
+    final_k: int | None = None,
+    history: list[dict] | None = None,
+    plan: QueryPlan | None = None,
+) -> tuple[list[dict[str, Any]], QueryPlan]:
+
+    final_k = final_k or TOP_K
+
+    plan = plan or route_query(
+        question,
+        history,
+    )
+
+    candidate_k = RETRIEVAL_CANDIDATES
+
+    if plan.intent in (
+        "definition",
+        "field_detail",
+        "architecture",
+        "version_history",
+    ):
+        candidate_k = max(
+            RETRIEVAL_CANDIDATES,
+            22,
+        )
+
+    if (
+        plan.focus_context
+        or plan.intent == "how_to"
+    ):
+        candidate_k = max(
+            RETRIEVAL_CANDIDATES,
+            45,
+        )
+
+    where = plan.chroma_where
+
+    bm25_f = _bm25_filter_dict(plan)
+
+    merged: dict[str, dict] = {}
+
+    per_query = max(
+        5,
+        candidate_k // max(
+            len(plan.search_queries),
+            1,
+        ),
+    )
+
+    for q in plan.search_queries:
+
+        for hit in hybrid_search(
+            store,
+            q,
+            top_k=per_query,
+            where=where,
+            bm25_filters=bm25_f,
+        ):
+
+            key = _chunk_key(hit)
+
+            if (
+                key not in merged
+                or hit["score"]
+                > merged[key]["score"]
+            ):
+                merged[key] = hit
+
+    hits = list(merged.values())
+
+    # =====================================================
+    # SECTION-FIRST RETRIEVAL
+    # =====================================================
+
+    section_hits = []
+
+    for hit in hits:
+
+        body = (
+            hit.get("parent_text")
+            or hit.get("text", "")
+        )
+
+        matches = find_matching_sections(
+            query=plan.search_question,
+            text=body,
+            min_score=0.45,
+        )
+
+        if not matches:
+            continue
+
+        # =====================================================
+        # AMBIGUITY DETECTION
+        # =====================================================
+
+        strong_matches = [
+            m
+            for m in matches
+            if m["score"] >= 0.72
+        ]
+
+        ambiguous_sections = []
+
+        if (
+            len(strong_matches) >= 2
+            and abs(
+                strong_matches[0]["score"]
+                - strong_matches[1]["score"]
+            ) < 0.12
+        ):
+            ambiguous_sections = [
+                {
+                    "heading": m["heading"],
+                    "score": m["score"],
+                }
+                for m in strong_matches[:5]
+            ]
+
+        top_match = matches[0]
+
+        complete_section = extract_complete_section(
+            text=body,
+            heading=top_match["heading"],
+        )
+
+        if not complete_section:
+            continue
+
+        boosted = {
+            **hit,
+            "parent_text": complete_section,
+            "section_title": top_match["heading"],
+            "section_score": top_match["score"],
+            "ambiguous_sections": ambiguous_sections,
+            "score": hit.get("score", 0)
+            + (top_match["score"] * 3.0),
+        }
+
+        if top_match["score"] > 0.72:
+            boosted["score"] += 5.0
+
+        section_hits.append(boosted)
+
+    if section_hits:
+        hits.extend(section_hits)
+
+    # =====================================================
+    # SECTION BOOSTING
+    # =====================================================
+
+    if (
+        is_configuration_question(plan.search_question)
+        or plan.intent in (
+            "how_to",
+            "procedure",
+        )
+    ):
+        boost_section_content(
+            hits,
+            plan.search_question,
+        )
+
+    _demote_boilerplate(hits)
+
+    # =====================================================
+    # PAGE EXPANSION
+    # =====================================================
+
+    if (
+        plan.intent in (
+            "definition",
+            "architecture",
+            "version_history",
+            "how_to",
+        )
+        or plan.focus_context
+    ):
+        _expand_adjacent_pages(
+            hits,
+            store,
+            expand_further=True,
+        )
+
+    elif (
+        plan.intent == "field_detail"
+        and not plan.focus_context
+    ):
+        _expand_adjacent_pages(
+            hits,
+            store,
+            expand_further=False,
+        )
+
+    # =====================================================
+    # RERANK
+    # =====================================================
+
+    hits = sorted(
+        hits,
+        key=lambda x: x.get("score", 0),
+        reverse=True,
+    )[:candidate_k]
+
+    reranked = rerank(
+        plan.search_question,
+        hits,
+        top_k=candidate_k,
+    )
+
+    # preserve section names for references
+    for r in reranked:
+        if r.get("section_title"):
+            r["reference_label"] = (
+                f"{r['section_title']} "
+                f"(Page {r['page']})"
+            )
+
+    limit = (
+        final_k + 2
+        if plan.intent == "field_detail"
+        else final_k
+    )
+
+    if plan.focus_context:
+
+        reranked = focus_hits(
+            reranked,
+            plan.search_question,
+        )
+
+        limit = min(
+            limit,
+            CONTEXT_FOCUS_MAX_SOURCES,
+        )
+
+    return _dedupe_by_parent(
+        reranked,
+        limit,
+    ), plan

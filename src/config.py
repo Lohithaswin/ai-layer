@@ -1,0 +1,67 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+ROOT = Path(__file__).resolve().parent.parent
+DOCS_DIR = Path("C:/path/to/your/Release-Documents")
+CHROMA_DIR = Path(os.getenv("CHROMA_DIR", ROOT / "data" / "chroma"))
+BM25_PATH = Path(os.getenv("BM25_PATH", ROOT / "data" / "bm25_index.pkl"))
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "600"))
+OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "2048"))
+
+EMBEDDING_MODEL = os.getenv(
+    "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+)
+RERANKER_MODEL = os.getenv(
+    "RERANKER_MODEL", "BAAI/bge-reranker-base"
+)
+
+TOP_K = int(os.getenv("TOP_K", "8"))
+RETRIEVAL_CANDIDATES = int(os.getenv("RETRIEVAL_CANDIDATES", "20"))
+HYBRID_DENSE_WEIGHT = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.5"))
+HYBRID_SPARSE_WEIGHT = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.5"))
+RRF_K = int(os.getenv("RRF_K", "60"))
+
+COLLECTION_NAME = "local_docs"
+
+# Parent-child chunking (child = search index, parent = LLM context)
+CHILD_CHUNK_SIZE = int(os.getenv("CHILD_CHUNK_SIZE", "200"))
+CHILD_CHUNK_OVERLAP = int(os.getenv("CHILD_CHUNK_OVERLAP", "40"))
+PARENT_MAX_CHARS = int(os.getenv("PARENT_MAX_CHARS", "3000"))
+
+# Legacy aliases (used if parent-child disabled)
+CHUNK_SIZE = CHILD_CHUNK_SIZE
+CHUNK_OVERLAP = CHILD_CHUNK_OVERLAP
+
+USE_HYBRID_SEARCH = os.getenv("USE_HYBRID_SEARCH", "true").lower() in ("1", "true", "yes")
+USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() in ("1", "true", "yes")
+MAX_EXPANDED_QUERIES = int(os.getenv("MAX_EXPANDED_QUERIES", "10"))
+
+# Collapse retrieval to one page/section for procedural questions (scalable, not per-topic)
+CONTEXT_FOCUS_ENABLED = os.getenv("CONTEXT_FOCUS_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+CONTEXT_FOCUS_MAX_SOURCES = int(os.getenv("CONTEXT_FOCUS_MAX_SOURCES", "10"))
+CONTEXT_FOCUS_PAGE_GAP = float(os.getenv("CONTEXT_FOCUS_PAGE_GAP", "0.35"))
+MAX_CONTEXT_CHARS = int(
+    os.getenv(
+        "MAX_CONTEXT_CHARS",
+        "25000"
+    )
+)
+# Demo/sample PDFs (generic payment/API content — deprioritized for YOUR_PRODUCT questions)
+DEMO_PDF_NAMES = frozenset(
+    {
+        "architecture-overview.pdf",
+        "api-security.pdf",
+        "deployment-guide.pdf",
+    }
+)

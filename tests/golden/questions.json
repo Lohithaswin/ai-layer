@@ -1,0 +1,74 @@
+{
+  "description": "Golden retrieval tests — run after ingest. Validates metadata filtering and recall.",
+  "cases": [
+    {
+      "id": "project_name_first_version",
+      "question": "which is the first version of the Product Security Management software release",
+      "product_filter": "project_name",
+      "intent": "version_history",
+      "context_must_include": ["100.0.0", "2012.10", "first version"],
+      "forbidden_files": ["architecture-overview.pdf", "api-security.pdf", "deployment-guide.pdf"]
+    },
+    {
+      "id": "project_module_full_form",
+      "question": "what is the PROJECT_MODULE full form",
+      "product_filter": "project_module",
+      "intent": "definition",
+      "context_must_include": ["Wind Power Management Agent"],
+      "forbidden_files": ["architecture-overview.pdf"]
+    },
+    {
+      "id": "add_new_user_fields",
+      "question": "what are the details of the fields in the Add New User window",
+      "product_filter": "project_module",
+      "intent": "field_detail",
+      "context_must_include": ["User Name", "Expiry Date", "Password", "Language", "Classification"],
+      "forbidden_files": ["architecture-overview.pdf"]
+    },
+    {
+      "id": "project_name_architecture_followup",
+      "question": "explain its architecture",
+      "history": [
+        {"role": "user", "content": "what is PROJECT_NAME?"},
+        {"role": "assistant", "content": "PROJECT_NAME is the Wind Power Management Center."}
+      ],
+      "product_filter": "project_name",
+      "intent": "architecture",
+      "context_must_include": ["Security Management"],
+      "forbidden_files": ["architecture-overview.pdf"],
+      "forbidden_phrases_in_context": ["Payment Service", "API Gateway", "Kafka"]
+    },
+    {
+      "id": "project_name_definition_short",
+      "question": "project_name?",
+      "product_filter": "project_name",
+      "intent": "definition",
+      "context_must_include": ["Wind Power Management"],
+      "forbidden_files": ["architecture-overview.pdf"]
+    },
+    {
+      "id": "project_module_ad_login",
+      "question": "If the AD users want to log in to the PROJECT_MODULE application what to do?",
+      "product_filter": "project_module",
+      "doc_type_filter": "install_guide",
+      "intent": "how_to",
+      "focus_context": true,
+      "context_must_include": ["EnableADLogin", "appsettings.json"],
+      "forbidden_phrases_in_context": ["ProductRoleAndAdGroupsMapping"],
+      "max_distinct_pages": 2
+    },
+    {
+      "id": "project_module_install_after_project_name_history",
+      "question": "give a detailed project_module installation steps",
+      "history": [
+        {"role": "user", "content": "project_name?"},
+        {"role": "assistant", "content": "PROJECT_NAME is the Wind Power Management Center."}
+      ],
+      "product_filter": "project_module",
+      "doc_type_filter": "install_guide",
+      "intent": "how_to",
+      "context_must_include": ["PROJECT_MODULE", "installation"],
+      "forbidden_files": ["PROJECT_NAME_Installation_and_Configuration_Guide.pdf"]
+    }
+  ]
+}
