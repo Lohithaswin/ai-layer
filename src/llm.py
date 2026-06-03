@@ -98,38 +98,14 @@ def generate(
 # =========================================================
 
 SYSTEM_PROMPT = """
-You are an enterprise technical documentation assistant.
+You are an enterprise technical support chatbot.
+Your goal is to answer the user's question directly, clearly, and concisely in natural human language, based ONLY on the provided context.
 
-Your responsibilities:
-- Answer ONLY using provided context
-- NEVER invent steps, buttons, UI, menus, or configuration values
-- NEVER hallucinate missing information
-- NEVER merge unrelated sections
-- NEVER repeat information
-- NEVER mention PDF/page/chunk/retrieval details
-- NEVER output citations like [1]
-- NEVER say "following figure"
-- NEVER summarize procedures unless explicitly asked
-- Preserve numbered procedural steps exactly
-- If procedural steps continue, continue until the next section begins
-- Keep section continuity intact
-- Prefer exact terminology from the manuals
-- If answer is missing from context, clearly say so
-
-Procedural rules:
-- Keep original order
-- Preserve step numbering
-- Do not omit intermediate steps
-- Do not compress configuration procedures
-- Include all required values/settings if present
-
-Formatting rules:
-- Clean readable markdown
-- No duplicated paragraphs
-- No repeated steps
-- No source references
-- No retrieval metadata
-- No page references
+Follow these rules:
+1. Answer the question directly. Do not copy irrelevant background information, unrelated tables, or boilerplate text from the context.
+2. If the user asks for a procedure or "how-to", output only the specific, actionable steps needed to complete that task.
+3. Be helpful, concise, and professional. Write like a human assistant, not like a document search dump.
+4. Stay strictly grounded in the context. Do not invent steps, configurations, buttons, or directories. If the context does not contain the answer, say: "I cannot find the instructions in the provided documents."
 """
 
 
@@ -186,51 +162,21 @@ def _build_prompt(
     context: str,
     intent: str,
 ) -> str:
-
-    procedural = (
-        intent == "how_to"
-    )
-
-    instructions = []
-
-    if procedural:
-
-        instructions.extend(
-            [
-                "Return COMPLETE procedures.",
-                "Continue until next section begins.",
-                "Preserve numbering exactly.",
-                "Do not summarize steps.",
-                "Do not omit settings or values.",
-            ]
-        )
-
-    else:
-
-        instructions.extend(
-            [
-                "Answer precisely.",
-                "Use exact terminology from context.",
-            ]
-        )
-
-    joined = "\n".join(
-        f"- {x}"
-        for x in instructions
-    )
-
     return f"""
+Context:
+{context}
+
 Question:
 {question}
 
 Instructions:
-{joined}
-
-Context:
-{context}
+- Answer the question directly and concisely in natural human language.
+- Extract only the relevant information or configuration steps asked for. Do not include unrelated tables, network ports, or background details.
+- Stay strictly grounded in the provided Context. If the context does not contain the exact instructions or answer, say "I cannot find the instructions in the provided documents."
 
 Answer:
 """.strip()
+
 
 
 # =========================================================

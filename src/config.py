@@ -22,7 +22,7 @@ RERANKER_MODEL = os.getenv(
     "RERANKER_MODEL", "BAAI/bge-reranker-base"
 )
 
-TOP_K = int(os.getenv("TOP_K", "8"))
+TOP_K = int(os.getenv("TOP_K", "5"))
 RETRIEVAL_CANDIDATES = int(os.getenv("RETRIEVAL_CANDIDATES", "20"))
 HYBRID_DENSE_WEIGHT = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.5"))
 HYBRID_SPARSE_WEIGHT = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.5"))
@@ -54,7 +54,7 @@ CONTEXT_FOCUS_PAGE_GAP = float(os.getenv("CONTEXT_FOCUS_PAGE_GAP", "0.35"))
 MAX_CONTEXT_CHARS = int(
     os.getenv(
         "MAX_CONTEXT_CHARS",
-        "25000"
+        "9000"
     )
 )
 MAX_SECTION_PAGES = int(os.getenv("MAX_SECTION_PAGES", "25"))

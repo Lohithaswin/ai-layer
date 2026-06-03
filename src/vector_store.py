@@ -204,6 +204,50 @@ class VectorStore:
             )
         return self._parse_results(result)
 
+    def batch_search(
+        self,
+        queries: list[str],
+        top_k: int = TOP_K,
+        where: dict | None = None,
+    ) -> list[list[dict[str, Any]]]:
+        if not queries or self._collection.count() == 0:
+            return [[] for _ in queries]
+
+        n = min(top_k, self._collection.count())
+        query_embeddings = self._embedder.encode(queries).tolist()
+        kwargs: dict[str, Any] = {
+            "query_embeddings": query_embeddings,
+            "n_results": n,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where:
+            kwargs["where"] = where
+        try:
+            results = self._collection.query(**kwargs)
+        except Exception:
+            results = self._collection.query(
+                query_embeddings=query_embeddings,
+                n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+
+        batch_hits = []
+        for i in range(len(queries)):
+            hits = []
+            if (
+                results["documents"]
+                and i < len(results["documents"])
+                and results["documents"][i]
+            ):
+                for doc, meta, dist in zip(
+                    results["documents"][i],
+                    results["metadatas"][i],
+                    results["distances"][i],
+                ):
+                    hits.append(self._hit_from_row(doc, meta, 1 - dist))
+            batch_hits.append(hits)
+        return batch_hits
+
     def search_keyword(
         self,
         term: str,

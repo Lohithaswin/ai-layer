@@ -60,6 +60,9 @@ body {
   flex-direction: column;
   padding: 16px;
   gap: 12px;
+  height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
 }
 
 .sidebar-brand {
@@ -189,6 +192,9 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -544,6 +550,9 @@ body {
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
 }
 
 .drawer-head {

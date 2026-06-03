@@ -247,6 +247,11 @@ def find_matching_sections(
             _heading_terms(heading),
         )
 
+        # Skip expensive similarity comparisons if there is no lexical overlap.
+        # Max score when lexical is 0.0 is 0.45, which can never meet min_score (>= 0.45).
+        if lexical <= 0.0:
+            continue
+
         semantic = _similarity(
             query,
             heading,
@@ -531,6 +536,10 @@ def boost_section_content(
                 query_terms,
                 _heading_terms(heading),
             )
+
+            # Skip similarity matching if no word overlap (score cannot reach threshold 0.55)
+            if lexical <= 0.0:
+                continue
 
             semantic = _similarity(
                 query,

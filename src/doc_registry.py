@@ -9,9 +9,11 @@ from pathlib import Path
 from src.config import DEMO_PDF_NAMES
 
 _DOC_TYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("user_manual", re.compile(r"user\s*manual|_manual", re.I)),
+    ("user_manual", re.compile(r"user\s*manual|_manual|user\s*guide", re.I)),
     ("install_guide", re.compile(r"installation|install", re.I)),
-    ("security_manual", re.compile(r"security\s*management|securitymanagement", re.I)),
+    ("security_manual", re.compile(r"security\s*management|securitymanagement|cybersecurity", re.I)),
+    ("release_notes", re.compile(r"release\s*notes|release_notes", re.I)),
+    ("change_log", re.compile(r"change\s*log|changelog", re.I)),
 ]
 
 
@@ -56,17 +58,25 @@ def classify_pdf(path: Path) -> DocMetadata:
             manual_version=None,
         )
 
-    # Dynamic product extraction from the filename prefix
-    # e.g., "PROJECT_MODULE_User Manual.pdf" -> product is "project_module"
+    # 1. Scan for known products first (scalable keyword scan)
     product = "unknown"
-    base = path.stem
-    normalized = base.replace("-", "_").replace(" ", "_")
-    parts = [p.strip() for p in normalized.split("_") if p.strip()]
-    if parts:
-        first = parts[0]
-        # Alphanumeric between 2 and 10 characters represents the product code
-        if 2 <= len(first) <= 10 and re.match(r"^[A-Za-z0-9]+$", first):
-            product = first.lower()
+    for known in ("project_name", "project_module", "pki", "sfs", "ldap", "iam", "mfa", "se1210"):
+        if known in lower:
+            product = known
+            break
+
+    # 2. Fall back to dynamic product extraction from the filename prefix
+    # e.g., "PROJECT_MODULE_User Manual.pdf" -> product is "project_module"
+    if product == "unknown":
+        base = path.stem
+        normalized = base.replace("-", "_").replace(" ", "_")
+        parts = [p.strip() for p in normalized.split("_") if p.strip()]
+        if parts:
+            first = parts[0]
+            # Alphanumeric between 2 and 10 characters represents the product code
+            if 2 <= len(first) <= 10 and re.match(r"^[A-Za-z0-9]+$", first):
+                if first.lower() not in ("release", "change", "changelog"):
+                    product = first.lower()
 
     doc_type = "unknown"
     for dtype, pat in _DOC_TYPE_PATTERNS:
@@ -74,7 +84,7 @@ def classify_pdf(path: Path) -> DocMetadata:
             doc_type = dtype
             break
 
-    if "security" in lower:
+    if "security" in lower and doc_type == "unknown":
         doc_type = "security_manual"
 
     return DocMetadata(

@@ -110,6 +110,29 @@ def _demote_boilerplate(
             h["score"] *= 0.7
 
 
+def _demote_release_logs(
+    hits: list[dict],
+    intent: str,
+) -> None:
+    if intent == "version_history":
+        return
+
+    for h in hits:
+        doc_type = h.get("doc_type", "")
+        src_file = (h.get("source_file") or "").lower()
+
+        is_log = (
+            doc_type in ("release_notes", "change_log")
+            or "release notes" in src_file
+            or "release_notes" in src_file
+            or "change log" in src_file
+            or "changelog" in src_file
+        )
+
+        if is_log:
+            h["score"] = h.get("score", 0.0) * 0.1
+
+
 _SEC_NUM_RE = re.compile(
     r"(?:^|\n)\s*(\d+\.\d+(?:\.\d+)*)\.?\s+[A-Z]",
     re.M,
@@ -264,8 +287,18 @@ def _expand_adjacent_pages(
     store: VectorStore,
     expand_further: bool = False,
 ) -> None:
+    # Caching helper to avoid redundant SQLite queries for the same pages
+    page_cache: dict[tuple[str, int], list[dict]] = {}
 
-    anchors = list(hits)
+    def get_cached_chunks(source_file: str, page: int) -> list[dict]:
+        key = (source_file, page)
+        if key not in page_cache:
+            page_cache[key] = store.get_chunks_for_page(source_file, page)
+        return page_cache[key]
+
+    # Only run adjacent page/section expansion on the top 15 candidates.
+    # Candidates ranked 16+ are highly unlikely to make it into the final context anyway.
+    anchors = sorted(hits, key=lambda x: x.get("score", 0), reverse=True)[:15]
 
     for h in anchors:
 
@@ -285,7 +318,7 @@ def _expand_adjacent_pages(
 
             if p >= 1:
 
-                for extra in store.get_chunks_for_page(
+                for extra in get_cached_chunks(
                     h["source_file"],
                     p,
                 ):
@@ -302,7 +335,7 @@ def _expand_adjacent_pages(
 
         if expand_further:
 
-            anchor_chunks = store.get_chunks_for_page(
+            anchor_chunks = get_cached_chunks(
                 h["source_file"],
                 h["page"],
             )
@@ -325,11 +358,12 @@ def _expand_adjacent_pages(
 
             current_p = h["page"]
 
-            for _ in range(15):
+            # Cap expansion pages to prevent excessive DB calls
+            for _ in range(2):
 
                 current_p += 1
 
-                page_chunks = store.get_chunks_for_page(
+                page_chunks = get_cached_chunks(
                     h["source_file"],
                     current_p,
                 )
@@ -404,11 +438,12 @@ def _expand_adjacent_pages(
 
             current_p = h["page"]
 
-            for _ in range(5):
+            # Cap table expansion to prevent CPU/database bottlenecks
+            for _ in range(1):
 
                 current_p += 1
 
-                page_chunks = store.get_chunks_for_page(
+                page_chunks = get_cached_chunks(
                     h["source_file"],
                     current_p,
                 )
@@ -581,18 +616,36 @@ def retrieve(
         ),
     )
 
-    for q in plan.search_queries:
+    # Batch dense query matching for speed
+    batch_dense_hits = store.batch_search(
+        plan.search_queries,
+        top_k=per_query,
+        where=where,
+    )
 
-        for hit in hybrid_search(
-            store,
-            q,
-            top_k=per_query,
-            where=where,
-            bm25_filters=bm25_f,
-        ):
+    bm25 = get_bm25_store()
 
+    for idx, q in enumerate(plan.search_queries):
+        dense_hits = batch_dense_hits[idx]
+
+        if USE_HYBRID_SEARCH:
+            sparse_hits = bm25.search(
+                q,
+                top_k=per_query,
+                filters=bm25_f,
+            )
+            # Reciprocal Rank Fusion (RRF) fusion
+            hits = _rrf_fuse(
+                dense_hits,
+                sparse_hits,
+                HYBRID_DENSE_WEIGHT,
+                HYBRID_SPARSE_WEIGHT,
+            )[:per_query]
+        else:
+            hits = dense_hits
+
+        for hit in hits:
             key = _chunk_key(hit)
-
             if (
                 key not in merged
                 or hit["score"]
@@ -700,6 +753,7 @@ def retrieve(
         )
 
     _demote_boilerplate(hits)
+    _demote_release_logs(hits, plan.intent)
 
     # =====================================================
     # PAGE EXPANSION
@@ -734,16 +788,18 @@ def retrieve(
     # RERANK
     # =====================================================
 
+    # Cap candidates sent to CPU Cross-Encoder reranker to minimize latency
+    rerank_limit = min(candidate_k, 15)
     hits = sorted(
         hits,
         key=lambda x: x.get("score", 0),
         reverse=True,
-    )[:candidate_k]
+    )[:rerank_limit]
 
     reranked = rerank(
         plan.search_question,
         hits,
-        top_k=candidate_k,
+        top_k=rerank_limit,
     )
 
     # preserve section names for references

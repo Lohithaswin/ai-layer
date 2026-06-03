@@ -104,17 +104,14 @@ def _clean_pdf_boilerplate(
         if not stripped:
             continue
 
-        # manual boilerplate
-        if any(
-            pattern in stripped
-            for pattern in [
-                "Product Installation Guide",
-                "PROJECT_MODULE User Manual",
-                "Restricted",
-                "© YourCompany",
-                "All rights reserved",
-            ]
-        ):
+        # Generic classification/confidentiality label match (exact)
+        if stripped.lower() in ("restricted", "confidential", "internal use", "public", "proprietary"):
+            continue
+        # Generic copyright/rights match (typical short footer line, not a long paragraph)
+        if len(stripped) < 120 and ("all rights reserved" in stripped.lower() or "©" in stripped or "copyright" in stripped.lower()):
+            continue
+        # Generic document title match (short lines starting with YOUR_PRODUCT/SFS/PKI and ending in Guide/Manual/Notes/Log/Overview)
+        if len(stripped) < 80 and re.match(r"^(?:PROJECT_NAME|PROJECT_MODULE|SFS|PKI)\s+.*(?:Guide|Manual|Notes|Log|Overview)$", stripped, re.I):
             continue
 
         # figure/table labels
@@ -553,11 +550,8 @@ def ask(
             )
         )
 
-        answer = (
-            _clean_pdf_boilerplate(
-                answer
-            )
-        )
+        # Do not clean PDF-level boilerplate headers/footers on the LLM's generated response
+        pass
 
         answer = (
             _remove_duplicate_content(
