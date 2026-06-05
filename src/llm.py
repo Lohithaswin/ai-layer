@@ -102,10 +102,14 @@ You are an enterprise technical support chatbot.
 Your goal is to answer the user's question directly, clearly, and concisely in natural human language, based ONLY on the provided context.
 
 Follow these rules:
-1. Answer the question directly. Do not copy irrelevant background information, unrelated tables, or boilerplate text from the context.
-2. If the user asks for a procedure or "how-to", output only the specific, actionable steps needed to complete that task.
-3. Be helpful, concise, and professional. Write like a human assistant, not like a document search dump.
-4. Stay strictly grounded in the context. Do not invent steps, configurations, buttons, or directories. If the context does not contain the answer, say: "I cannot find the instructions in the provided documents."
+1. Answer the question directly and professionally. Do not copy irrelevant background information, unrelated tables, or boilerplate text from the context.
+2. If the user asks for a procedure, format, checklist, or "how-to", output only the specific, actionable steps or format details needed to complete that task.
+3. Be helpful, conversational, and professional. Use the conversation history to resolve referential terms or follow-up context.
+4. Stay strictly grounded in the context. Do not invent steps, configurations, directories, or facts. Do not bring in any external knowledge, brand names, company names (such as YourCompany, etc.), or product names unless they are explicitly mentioned in the context.
+5. Never expand acronyms (like PROJECT_MODULE, PROJECT_NAME, WPP, SFS, PKI) using external knowledge or guessing. If the full name of an acronym is not explicitly written in the context, leave it as the acronym only.
+6. For comparative, conceptual, or definition questions, synthesize a summarized brief answer or comparison using only the facts, roles, and descriptions of the components/products provided in the context.
+7. Never substitute an unrelated procedure (e.g., uninstallation, installation, setup) when a specific test format, checklist, or procedure (such as a Factory Acceptance Test (FAT) format) is requested but not present in the context.
+8. If the context does not contain the requested procedure/format/checklist, or lacks any relevant information to define or compare the subjects, you MUST return exactly: "I cannot find the instructions in the provided documents."
 """
 
 
@@ -161,18 +165,36 @@ def _build_prompt(
     question: str,
     context: str,
     intent: str,
+    history_str: str = "",
 ) -> str:
+    history_section = f"\nConversation History:\n{history_str}" if history_str else ""
+    
+    q_lower = question.lower()
+    is_comparison = any(w in q_lower for w in ("compare", "difference", "versus", "vs", "distinguish", "relationship", "comparison"))
+    
+    if is_comparison or intent in ("definition", "architecture", "general"):
+        instruction_block = """- Answer the question by summarizing, defining, or comparing the subjects using only the facts described in the Context.
+- Do not use any external knowledge. Never mention company names (such as YourCompany), brand names, or external facts not in the context.
+- Never expand acronyms (e.g., PROJECT_MODULE, PROJECT_NAME, WPP) unless the context explicitly defines their full form. If not defined, leave them as acronyms.
+- Synthesize a comparative summary or explain relationships between components (e.g., YOUR_PRODUCT) using only the details, roles, and descriptions provided in the text.
+- If the context does not contain any relevant information about the requested components or subjects, say "I cannot find the instructions in the provided documents." """
+    else:
+        instruction_block = """- Extract only the specific, actionable steps, format details, or configurations requested. Do not copy unrelated tables, lists of ports, or background details.
+- Stay strictly grounded in the provided Context. Do not invent steps, configurations, buttons, or directories. Do not mention brands or company names unless explicitly mentioned.
+- Never substitute an unrelated procedure (e.g., uninstallation, installation, setup) when a specific test format, checklist, or procedure (such as a Factory Acceptance Test (FAT) format) is requested.
+- If the context does not contain the exact instructions, format, or procedure, say "I cannot find the instructions in the provided documents." """
+
     return f"""
 Context:
 {context}
+{history_section}
 
 Question:
 {question}
 
 Instructions:
-- Answer the question directly and concisely in natural human language.
-- Extract only the relevant information or configuration steps asked for. Do not include unrelated tables, network ports, or background details.
-- Stay strictly grounded in the provided Context. If the context does not contain the exact instructions or answer, say "I cannot find the instructions in the provided documents."
+- Answer the question directly and concisely in natural human language. Use the Conversation History to understand follow-up references (e.g. pronouns like "its", "this", "it").
+{instruction_block}
 
 Answer:
 """.strip()
@@ -188,6 +210,7 @@ def generate_answer(
     question: str,
     hits: list[dict],
     plan,
+    history: list[dict] | None = None,
 ):
 
     context = _build_context(
@@ -201,10 +224,17 @@ def generate_answer(
             "enough information."
         )
 
+    history_str = ""
+    if history:
+        for msg in history[-5:]:
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            history_str += f"{role}: {msg.get('content')}\n"
+
     prompt = _build_prompt(
         question,
         context,
         plan.intent,
+        history_str=history_str,
     )
 
     raw = generate(

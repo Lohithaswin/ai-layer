@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 from dataclasses import dataclass, field
 
 from src.query_context import collect_subjects, is_follow_up, resolve_question
@@ -30,6 +31,22 @@ class QueryPlan:
     search_queries: list[str] = field(default_factory=list)
     chroma_where: dict | None = None
     focus_context: bool = False
+
+
+def _bm25_filter_dict(
+    plan: QueryPlan,
+) -> dict[str, Any] | None:
+
+    f: dict[str, Any] = {}
+
+    if plan.product_filter:
+        f["product"] = plan.product_filter
+
+    # doc_type is soft-boosted in retrieval rather than hard-filtered here
+    if plan.exclude_demo:
+        f["is_demo"] = False
+
+    return f or None
 
 
 def _detect_intent(question: str, search_q: str) -> str:
@@ -216,8 +233,7 @@ def _build_chroma_where(
     clauses: list[dict] = []
     if product and product not in ("unknown", "demo"):
         clauses.append({"product": {"$eq": product}})
-    if doc_type:
-        clauses.append({"doc_type": {"$eq": doc_type}})
+    # doc_type is soft-boosted in retrieval rather than hard-filtered here
     if exclude_demo:
         clauses.append({"is_demo": {"$eq": False}})
     if not clauses:

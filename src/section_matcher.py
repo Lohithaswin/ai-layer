@@ -130,15 +130,11 @@ def _is_probable_heading(text: str) -> bool:
     if stripped.endswith("."):
         return False
 
-    # reject obvious prose/procedure lines
+    # reject obvious prose lines (e.g. instruction phrases, inline figures)
     if re.search(
         r"\b("
-        r"click|select|enter|save|open|"
-        r"following|shown|figure|"
-        r"user can|provides|enables|"
-        r"window|dialog|screen|"
-        r"configure|configured|"
-        r"steps?|procedure"
+        r"click|enter\s+the|user\s+can|provides?|enables?|"
+        r"following\s+figure|shown\s+in|illustrated\s+in"
         r")\b",
         stripped,
         re.I,

@@ -67,7 +67,7 @@ def _build_child_parent_text(
 
 
 def _format_table(table) -> str:
-    """Convert a PyMuPDF table to readable text (pipe-separated rows)."""
+    """Convert a PyMuPDF table to readable text (pipe-separated rows), collapsing empty columns."""
     try:
         rows = table.extract()
     except Exception:
@@ -79,7 +79,11 @@ def _format_table(table) -> str:
     for row in rows:
         cells = [str(c or "").strip().replace("\n", " ") for c in row]
         if any(cells):
-            lines.append(" | ".join(cells))
+            row_str = " | ".join(cells)
+            # Collapse multiple consecutive pipe separators (caused by empty or merged cells)
+            row_str = re.sub(r"(\s*\|\s*){2,}", " | ", row_str).strip(" |")
+            if row_str:
+                lines.append(row_str)
     if not lines:
         return ""
     return "TABLE:\n" + "\n".join(lines)
@@ -90,11 +94,13 @@ def _extract_page_content(page: fitz.Page) -> str:
     parts: list[str] = []
 
     tables = []
-    try:
-        finder = page.find_tables()
-        tables = finder.tables if hasattr(finder, "tables") else []
-    except Exception:
-        pass
+    from src.config import EXTRACT_TABLES
+    if EXTRACT_TABLES:
+        try:
+            finder = page.find_tables()
+            tables = finder.tables if hasattr(finder, "tables") else []
+        except Exception:
+            pass
 
     def is_in_any_table(bbox) -> bool:
         bx0, by0, bx1, by1 = bbox[:4]
@@ -131,7 +137,15 @@ def load_pdf_chunks(pdf_path: Path, metadata: dict | None = None) -> list[dict]:
       - parent_id, source_file, page, chunk_index
     """
     doc = fitz.open(str(pdf_path))
-    rel_path = str(pdf_path.relative_to(pdf_path.parents[2]))
+    from src.config import DOCS_DIR
+    try:
+        rel_path = str(pdf_path.relative_to(DOCS_DIR.parent))
+    except Exception:
+        try:
+            rel_path = str(pdf_path.relative_to(pdf_path.parents[1]))
+        except Exception:
+            rel_path = pdf_path.name
+    rel_path = rel_path.replace("\\", "/") # normalize backslashes on Windows
     chunks: list[dict] = []
     chunk_index = 0
 

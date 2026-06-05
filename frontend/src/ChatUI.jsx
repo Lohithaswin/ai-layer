@@ -153,7 +153,7 @@ export function ChatUI() {
     }, 50);
   };
 
-  const handleSendMessage = async (e, overrideText) => {
+  const handleSendMessage = async (e, overrideText, productFilterOverride, fileFilterOverride) => {
     e?.preventDefault();
     const text = (overrideText ?? inputValue).trim();
     if (!text || loading) return;
@@ -174,38 +174,65 @@ export function ChatUI() {
     setMessages((prev) => [...prev, { role: 'user', content: text }]);
 
     try {
-      const response = await fetch(`${API_BASE}/chat`, {
+      const response = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, history }),
+        body: JSON.stringify({ 
+          question: text, 
+          history,
+          product_filter: productFilterOverride || null,
+          file_filter: fileFilterOverride || null
+        }),
         signal: controller.signal,
       });
 
       if (!response.ok) throw new Error(`API error (${response.status})`);
-      const data = await response.json();
-
-      let answer = data.answer || '';
-      const footerIdx = answer.indexOf('\n\n---\n**Sources:**');
-      if (footerIdx > -1) answer = answer.slice(0, footerIdx);
-
-      const assistantMessage = {
+      
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let answer = '';
+      
+      let assistantMessage = {
         role: 'assistant',
-        content: answer,
-        sources: data.sources || [],
-        processingTimeMs: data.processing_time_ms,
-        retrievalTimeMs: data.retrieval_time_ms,
-        numSourcesRetrieved: data.num_sources_retrieved,
-        numSourcesUsed: data.num_sources_used,
-        questionIntent: data.question_intent,
-        retrievalMode: data.retrieval_mode,
-        usedLlm: data.used_llm,
-        note: data.note,
+        content: '',
+        sources: [],
       };
-
+      
       setMessages((prev) => [...prev, assistantMessage]);
-      if (assistantMessage.sources.length > 0) {
-        setActiveSources(assistantMessage.sources);
-        setDrawerOpen(true);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunkStr = decoder.decode(value, { stream: true });
+        const lines = chunkStr.split('\n');
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const data = JSON.parse(line.slice(6));
+                    if (data.chunk) {
+                        answer += data.chunk;
+                        setMessages((prev) => {
+                            const newMessages = [...prev];
+                            newMessages[newMessages.length - 1] = { ...assistantMessage, content: answer };
+                            return newMessages;
+                        });
+                    }
+                    if (data.done) {
+                        assistantMessage.sources = data.sources || [];
+                        setMessages((prev) => {
+                            const newMessages = [...prev];
+                            newMessages[newMessages.length - 1] = { ...assistantMessage, content: answer, sources: data.sources || [] };
+                            return newMessages;
+                        });
+                        if (data.sources && data.sources.length > 0) {
+                            setActiveSources(data.sources);
+                            setDrawerOpen(true);
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
       }
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -471,7 +498,75 @@ export function ChatUI() {
                         </div>
                       </div>
                     )}
-                    
+                    {((msg.options && msg.options.length > 0) || (msg.sources && msg.sources.length > 0)) && (
+                      <div className="options-dropdown-container">
+                        {/* Section / Heading matches dropdown */}
+                        {msg.options && msg.options.length > 0 && (
+                          <div className="filter-group">
+                            <span className="options-dropdown-label">Alternative matching sections:</span>
+                            <select
+                              className="options-dropdown"
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  handleSendMessage(null, e.target.value);
+                                }
+                              }}
+                              defaultValue=""
+                            >
+                              <option value="" disabled>Select an option...</option>
+                              {msg.options.map((opt, oIdx) => (
+                                <option key={oIdx} value={opt}>{opt}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* File Name Filter Dropdown */}
+                        {msg.sources && Array.from(new Set(msg.sources.map(s => s.source_file))).length > 1 && (
+                          <div className="filter-group">
+                            <span className="options-dropdown-label">Narrow search to a specific document:</span>
+                            <select
+                              className="options-dropdown"
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || '';
+                                  handleSendMessage(null, lastUserMsg, null, e.target.value);
+                                }
+                              }}
+                              defaultValue=""
+                            >
+                              <option value="" disabled>Select Document...</option>
+                              {Array.from(new Set(msg.sources.map(s => s.source_file))).map((file, fIdx) => (
+                                <option key={fIdx} value={file}>{file.split('\\').pop().split('/').pop()}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* Product Filter Dropdown */}
+                        {msg.sources && Array.from(new Set(msg.sources.map(s => s.product).filter(p => p && p !== 'unknown' && p !== 'demo'))).length > 1 && (
+                          <div className="filter-group">
+                            <span className="options-dropdown-label">Narrow search to a specific product:</span>
+                            <select
+                              className="options-dropdown"
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || '';
+                                  handleSendMessage(null, lastUserMsg, e.target.value, null);
+                                }
+                              }}
+                              defaultValue=""
+                            >
+                              <option value="" disabled>Select Product...</option>
+                              {Array.from(new Set(msg.sources.map(s => s.product).filter(p => p && p !== 'unknown' && p !== 'demo'))).map((prod, pIdx) => (
+                                <option key={pIdx} value={prod}>{prod.toUpperCase()}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <div className="message-actions">
                       <button
                         className="action-btn"

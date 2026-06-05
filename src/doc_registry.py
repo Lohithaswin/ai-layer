@@ -10,7 +10,7 @@ from src.config import DEMO_PDF_NAMES
 
 _DOC_TYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("user_manual", re.compile(r"user\s*manual|_manual|user\s*guide", re.I)),
-    ("install_guide", re.compile(r"installation|install", re.I)),
+    ("install_guide", re.compile(r"installation|install|port\s*configuration|firewall|setup|deployment", re.I)),
     ("security_manual", re.compile(r"security\s*management|securitymanagement|cybersecurity", re.I)),
     ("release_notes", re.compile(r"release\s*notes|release_notes", re.I)),
     ("change_log", re.compile(r"change\s*log|changelog", re.I)),
@@ -60,7 +60,7 @@ def classify_pdf(path: Path) -> DocMetadata:
 
     # 1. Scan for known products first (scalable keyword scan)
     product = "unknown"
-    for known in ("project_name", "project_module", "pki", "sfs", "ldap", "iam", "mfa", "se1210"):
+    for known in ("sfs", "project_name", "project_module", "pki", "ldap", "iam", "mfa", "se1210"):
         if known in lower:
             product = known
             break

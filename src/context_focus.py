@@ -32,10 +32,13 @@ _STOPWORDS = frozenset(
 
 _PROCEDURE_RE = re.compile(
     r"\b("
-    r"what to do|how to|how do|how can|steps?|procedure|configure|configuration|"
-    r"enable|disable|set up|setup|install|deploy|log in|login|log on|sign in|"
-    r"create|add|remove|delete|update|change|modify|map|enter|open|restart|"
-    r"follow the|perform the|troubleshoot|troubleshooting|problems?|issues?|solutions?"
+    r"what to do|how to|how do|how can|steps?|procedure|configur[a-z]*|"
+    r"enabl[a-z]*|disabl[a-z]*|set[ \-]up|setup|install[a-z]*|deploy[a-z]*|"
+    r"log[ \-]in|login|log[ \-]on|sign[ \-]in|"
+    r"creat[a-z]*|add[a-z]*|remov[a-z]*|delet[a-z]*|updat[a-z]*|chang[a-z]*|"
+    r"modify[a-z]*|mapping|mapped|enter[a-z]*|open[a-z]*|restart[a-z]*|"
+    r"follow the|perform the|troubleshoot[a-z]*|problems?|issues?|solutions?|"
+    r"test[a-z]*|verification|checklist|acceptance|format"
     r")\b",
     re.I,
 )

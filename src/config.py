@@ -11,6 +11,8 @@ CHROMA_DIR = Path(os.getenv("CHROMA_DIR", ROOT / "data" / "chroma"))
 BM25_PATH = Path(os.getenv("BM25_PATH", ROOT / "data" / "bm25_index.pkl"))
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+EXTRACT_TABLES = os.getenv("EXTRACT_TABLES", "true").lower() in ("1", "true", "yes")
+
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_TIMEOUT = max(float(os.getenv("OLLAMA_TIMEOUT", "900")), 900.0)
 OLLAMA_NUM_PREDICT = max(int(os.getenv("OLLAMA_NUM_PREDICT", "3072")), 3072)

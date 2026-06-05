@@ -26,6 +26,8 @@ class HistoryMessage(BaseModel):
 class ChatRequest(BaseModel):
     question: str
     history: list[HistoryMessage] = []
+    product_filter: str | None = None
+    file_filter: str | None = None
 
 
 class SourceOut(BaseModel):
@@ -36,6 +38,7 @@ class SourceOut(BaseModel):
     score: float
     section: str = ""
     source_type: str = "Local"
+    product: str = "unknown"
     context_before: str = ""
     context_after: str = ""
 
@@ -51,6 +54,7 @@ class ChatResponseOut(BaseModel):
     num_sources_used: int
     question_intent: str
     retrieval_mode: str = ""
+    options: list[str] = []
 
 
 def _to_out(resp: ChatResponse) -> ChatResponseOut:
@@ -65,6 +69,7 @@ def _to_out(resp: ChatResponse) -> ChatResponseOut:
                 score=s.score,
                 section=s.section,
                 source_type=s.source_type,
+                product=s.product,
                 context_before=s.context_before,
                 context_after=s.context_after,
             )
@@ -78,6 +83,7 @@ def _to_out(resp: ChatResponse) -> ChatResponseOut:
         num_sources_used=resp.num_sources_used,
         question_intent=resp.question_intent,
         retrieval_mode=resp.retrieval_mode,
+        options=resp.options,
     )
 
 
@@ -95,15 +101,13 @@ def health():
 
 @app.get("/documents")
 def list_docs():
-    from src.config import DOCS_DIR
     from src.vector_store import get_vector_store
     
     store = get_vector_store()
-    files = []
-    if DOCS_DIR.exists():
-        files = [f.name for f in DOCS_DIR.glob("*.pdf")]
+    
     return {
-        "files": files,
+        "files": store.get_unique_files(),
+        "products": store.get_unique_products(),
         "collection_size": store.count,
     }
 
@@ -111,4 +115,71 @@ def list_docs():
 @app.post("/chat", response_model=ChatResponseOut)
 def chat(body: ChatRequest):
     hist = [{"role": m.role, "content": m.content} for m in body.history]
-    return _to_out(ask(body.question, history=hist))
+    return _to_out(ask(
+        body.question,
+        history=hist,
+        product_filter=body.product_filter,
+        file_filter=body.file_filter
+    ))
+
+import json
+from fastapi.responses import StreamingResponse
+from src.retrieval import retrieve
+from src.vector_store import get_vector_store
+from src.rag import _format_context
+from src.llm import SYSTEM_PROMPT, _build_prompt
+from src.llm_stream import generate_stream
+
+@app.post("/chat/stream")
+def chat_stream(body: ChatRequest):
+    def event_stream():
+        hist = [{"role": m.role, "content": m.content} for m in body.history]
+        store = get_vector_store()
+        hits, plan = retrieve(
+            body.question,
+            store,
+            history=hist,
+            product_filter=body.product_filter,
+            file_filter=body.file_filter,
+        )
+
+        if not hits:
+            yield f"data: {json.dumps({'chunk': 'The indexed documents do not contain enough information.'})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
+            return
+
+        context, sources = _format_context(hits)
+        
+        history_str = ""
+        if hist:
+            for msg in hist[-5:]:
+                role = "User" if msg.get("role") == "user" else "Assistant"
+                history_str += f"{role}: {msg.get('content')}\n"
+
+        prompt = _build_prompt(
+            body.question,
+            context,
+            plan.intent,
+            history_str=history_str,
+        )
+
+        for chunk in generate_stream(prompt, system=SYSTEM_PROMPT):
+            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            
+        sources_out = [
+            {
+                "ref": s.ref,
+                "source_file": s.source_file,
+                "page": s.page,
+                "excerpt": s.excerpt,
+                "score": s.score,
+                "section": s.section,
+                "source_type": s.source_type,
+                "product": s.product,
+            }
+            for s in sources
+        ]
+        
+        yield f"data: {json.dumps({'done': True, 'sources': sources_out})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -38,6 +38,7 @@ class Source:
     score: float
     section: str = ""
     source_type: str = "Local"
+    product: str = "unknown"
 
     context_before: str = ""
     context_after: str = ""
@@ -70,6 +71,10 @@ class ChatResponse:
     question_intent: str = "general"
 
     retrieval_mode: str = ""
+
+    options: list[str] = field(
+        default_factory=list
+    )
 
 
 # =========================================================
@@ -330,6 +335,7 @@ def _format_context(
                     or hit.get("section_match")
                     or ""
                 ),
+                product=hit.get("product", "unknown"),
             )
         )
 
@@ -377,6 +383,8 @@ def ask(
     store: VectorStore | None = None,
     append_footer: bool = False,
     history: list[dict] | None = None,
+    product_filter: str | None = None,
+    file_filter: str | None = None,
 ) -> ChatResponse:
 
     start_time = time.time()
@@ -392,54 +400,29 @@ def ask(
         question,
         store,
         history=history,
+        product_filter=product_filter,
+        file_filter=file_filter,
     )
     # =====================================================
-    # AMBIGUOUS SECTION DETECTION
+    # AMBIGUOUS SECTION / ALTERNATE OPTIONS DETECTION
     # =====================================================
-
+    options = []
     for hit in hits:
+        amb_secs = hit.get("ambiguous_sections", [])
+        top_heading = hit.get("section_title")
+        for sec in amb_secs:
+            h = sec["heading"]
+            if h != top_heading and h not in options:
+                options.append(h)
 
-        ambiguous_sections = hit.get(
-            "ambiguous_sections",
-            [],
-        )
-
-        if not ambiguous_sections:
-            continue
-
-        options = []
-
-        for idx, sec in enumerate(
-            ambiguous_sections,
-            start=1,
-        ):
-            options.append(
-                f"{idx}. {sec['heading']}"
-            )
-
-        retrieval_time = (
-            time.time()
-            - retrieval_start
-        ) * 1000
-
-        return ChatResponse(
-            answer=
-            (
-                "I found multiple relevant sections:\n\n"
-                + "\n".join(options)
-                + "\n\nPlease specify which section you want."
-            ),
-            sources=[],
-            used_llm=False,
-            note="ambiguous_section",
-            processing_time_ms=0,
-            retrieval_time_ms=retrieval_time,
-            num_sources_retrieved=len(hits),
-            question_intent=plan.intent,
-            retrieval_mode=_retrieval_mode_label(
-                plan.product_filter
-            ),
-        )
+    if hits:
+        best_score = hits[0].get("score", 0.0)
+        for h in hits[1:]:
+            h_score = h.get("score", 0.0)
+            if h_score >= best_score * 0.85:
+                label = h.get("section_title")
+                if label and label not in options:
+                    options.append(label)
 
     retrieval_time = (
         time.time()
@@ -476,6 +459,7 @@ def ask(
             num_sources_retrieved=0,
             question_intent=intent,
             retrieval_mode=mode,
+            options=options,
         )
 
     # =====================================================
@@ -520,6 +504,7 @@ def ask(
             ),
             question_intent=intent,
             retrieval_mode=mode,
+            options=options,
         )
 
     # =====================================================
@@ -535,6 +520,7 @@ def ask(
             question=question,
             hits=hits,
             plan=plan,
+            history=history,
         )
 
         # final cleanup only
@@ -587,6 +573,7 @@ def ask(
             ),
             question_intent=intent,
             retrieval_mode=mode,
+            options=options,
         )
 
     # =====================================================
@@ -613,4 +600,5 @@ def ask(
         ),
         question_intent=intent,
         retrieval_mode=mode,
+        options=options,
     )

@@ -45,13 +45,18 @@ def _rrf_fuse(
 
     for rank, hit in enumerate(dense_hits):
         key = _chunk_key(hit)
-        scores[key] = scores.get(key, 0) + dense_weight / (k + rank + 1)
-        records[key] = {**hit, **records.get(key, {})}
+        scores[key] = hit.get("score", 0.0)
+        records[key] = dict(hit)
 
     for rank, hit in enumerate(sparse_hits):
         key = _chunk_key(hit)
-        scores[key] = scores.get(key, 0) + sparse_weight / (k + rank + 1)
-        records[key] = {**hit, **records.get(key, {})}
+        if key in scores:
+            # Give a small bonus for being found in both sparse and dense
+            scores[key] += 0.02
+        else:
+            # Baseline score for pure sparse hits so they don't override strong dense hits
+            scores[key] = 0.55
+            records[key] = dict(hit)
 
     fused = []
 
@@ -60,7 +65,7 @@ def _rrf_fuse(
         key=lambda x: x[1],
         reverse=True,
     ):
-        rec = records[key]
+        rec = dict(records[key])
         rec["score"] = score
         fused.append(rec)
 
@@ -131,6 +136,69 @@ def _demote_release_logs(
 
         if is_log:
             h["score"] = h.get("score", 0.0) * 0.1
+
+
+def _is_metadata_or_toc_page(text: str) -> bool:
+    text_lower = text.lower()
+    # Dotted leaders or spaced dotted leaders
+    if len(re.findall(r'[\.\-\_]{3,}\s*\d+', text_lower)) >= 3:
+        return True
+    if len(re.findall(r'\.\s+\.\s+\.\s+\d+', text_lower)) >= 3:
+        return True
+    
+    # Typical introductory section titles
+    intro_keywords = [
+        "intended audience", 
+        "document structure", 
+        "document conventions", 
+        "disclaimer of liability", 
+        "qualified personnel",
+        "use as described",
+        "table of contents",
+        "table of content",
+        "preface"
+    ]
+    if any(kw in text_lower for kw in intro_keywords):
+        return True
+        
+    # Chapter list table / summaries
+    if "brief description" in text_lower and any(kw in text_lower for kw in ["glossary", "uninstallation procedure", "troubleshooting"]):
+        return True
+        
+    return False
+
+
+def _demote_toc_and_history(
+    hits: list[dict],
+) -> None:
+    for h in hits:
+        text = (
+            h.get("parent_text")
+            or h.get("text", "")
+        )
+        is_intro = _is_metadata_or_toc_page(text)
+        is_history = any(kw in text.lower() for kw in ["document version history", "revision history", "version history", "modification record"])
+        if is_intro or is_history:
+            h["score"] = h.get("score", 0.0) * 0.01
+
+
+def _boost_matching_doc_type(
+    hits: list[dict],
+    doc_type_filter: str | None,
+) -> None:
+    if not doc_type_filter:
+        return
+
+    for h in hits:
+        doc_type = h.get("doc_type")
+        if doc_type == doc_type_filter:
+            h["score"] = h.get("score", 0.0) * 1.2
+        elif doc_type == "unknown":
+            # Neutral weight for unknown since it might be a valid guide
+            pass
+        else:
+            # Demote non-matching types slightly
+            h["score"] = h.get("score", 0.0) * 0.8
 
 
 _SEC_NUM_RE = re.compile(
@@ -514,9 +582,7 @@ def _bm25_filter_dict(
     if plan.product_filter:
         f["product"] = plan.product_filter
 
-    if plan.doc_type_filter:
-        f["doc_type"] = plan.doc_type_filter
-
+    # doc_type is soft-boosted in retrieval rather than hard-filtered here
     if plan.exclude_demo:
         f["is_demo"] = False
 
@@ -571,6 +637,8 @@ def retrieve(
     final_k: int | None = None,
     history: list[dict] | None = None,
     plan: QueryPlan | None = None,
+    product_filter: str | None = None,
+    file_filter: str | None = None,
 ) -> tuple[list[dict[str, Any]], QueryPlan]:
 
     final_k = final_k or TOP_K
@@ -579,6 +647,19 @@ def retrieve(
         question,
         history,
     )
+
+    if product_filter:
+        plan.product_filter = product_filter
+
+    if file_filter:
+        plan.chroma_where = {"source_file": {"$eq": file_filter}}
+        if plan.exclude_demo:
+            plan.chroma_where = {
+                "$and": [
+                    {"source_file": {"$eq": file_filter}},
+                    {"is_demo": {"$eq": False}}
+                ]
+            }
 
     candidate_k = RETRIEVAL_CANDIDATES
 
@@ -605,6 +686,9 @@ def retrieve(
     where = plan.chroma_where
 
     bm25_f = _bm25_filter_dict(plan)
+    if file_filter:
+        bm25_f = bm25_f or {}
+        bm25_f["source_file"] = file_filter
 
     merged: dict[str, dict] = {}
 
@@ -646,12 +730,21 @@ def retrieve(
 
         for hit in hits:
             key = _chunk_key(hit)
+            
+            # Apply penalty to expanded queries so primary query takes precedence
+            query_penalty = 1.0 if idx == 0 else 0.90
+            effective_score = hit.get("score", 0.0) * query_penalty
+            
+            # Create a copy so we don't modify the original hit if it's shared
+            hit_copy = dict(hit)
+            hit_copy["score"] = effective_score
+            
             if (
                 key not in merged
-                or hit["score"]
+                or effective_score
                 > merged[key]["score"]
             ):
-                merged[key] = hit
+                merged[key] = hit_copy
 
     hits = list(merged.values())
 
@@ -754,6 +847,8 @@ def retrieve(
 
     _demote_boilerplate(hits)
     _demote_release_logs(hits, plan.intent)
+    _demote_toc_and_history(hits)
+    _boost_matching_doc_type(hits, plan.doc_type_filter)
 
     # =====================================================
     # PAGE EXPANSION

@@ -182,8 +182,9 @@ def expanded_queries(question: str, subjects: list[str] | None = None) -> list[s
         )
 
     if is_procedure_question(question):
-        for term in list(query_terms(question))[:8]:
-            queries.append(term)
+        terms = list(query_terms(question))
+        if len(terms) > 1:
+            queries.append(" ".join(terms))
         queries.append(f"procedure steps configuration {question[:120]}")
 
     if is_version_history_question(question):
@@ -227,6 +228,15 @@ def expanded_queries(question: str, subjects: list[str] | None = None) -> list[s
                     f"{topic} definition",
                     f"about {topic}",
                 ])
+
+    if subjects and len(subjects) > 1:
+        for subj in subjects:
+            subj_upper = subj.upper()
+            if subj_upper not in {x.upper() for x in queries}:
+                queries.append(subj_upper)
+            topic_query = f"{subj_upper} overview definition"
+            if topic_query.lower() not in {x.lower() for x in queries}:
+                queries.append(topic_query)
 
     # Dedupe preserving order; cap count for latency
     from src.config import MAX_EXPANDED_QUERIES

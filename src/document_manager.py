@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from src.config import ROOT
 from src.artifactory_connector import ArtifactoryConnector, ArtifactoryConnectorMock
 from src.sharepoint_connector import SharePointConnector, SharePointConnectorMock
 
@@ -24,13 +26,33 @@ class Document:
     content_hash: str = ""  # SHA256 of content (for change detection)
 
 
+INDEX_PATH = ROOT / "data" / "indexed_documents.json"
+
+
 @dataclass
 class DocumentIndex:
     """Track indexed documents to avoid re-embedding unchanged files."""
     indexed_documents: dict[str, dict] = field(default_factory=dict)
     # Key: "{source_type}:{source_file}"
-    # Value: {"hash": "...", "indexed_at": "...", "page_count": ...}
+    # Value: {"content_hash": "...", "indexed_at": "...", "page_count": ...}
     
+    def load(self, path: Path = INDEX_PATH) -> None:
+        if path.exists():
+            try:
+                self.indexed_documents = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"Warning: Failed to load document index: {e}")
+                self.indexed_documents = {}
+        else:
+            self.indexed_documents = {}
+            
+    def save(self, path: Path = INDEX_PATH) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self.indexed_documents, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: Failed to save document index: {e}")
+
     def is_indexed(self, doc: Document, content_hash: str) -> bool:
         """Check if document with same hash is already indexed."""
         key = f"{doc.source_type}:{doc.source_file}"
@@ -50,6 +72,11 @@ class DocumentIndex:
     def remove(self, doc: Document) -> None:
         """Mark document as removed (for cleanup)."""
         key = f"{doc.source_type}:{doc.source_file}"
+        if key in self.indexed_documents:
+            del self.indexed_documents[key]
+
+    def remove_by_key(self, key: str) -> None:
+        """Remove document by its full key."""
         if key in self.indexed_documents:
             del self.indexed_documents[key]
 
@@ -89,6 +116,7 @@ class DocumentManager:
         self.sharepoint = sharepoint or (SharePointConnectorMock() if use_mocks else None)
         self.artifactory = artifactory or (ArtifactoryConnectorMock() if use_mocks else None)
         self.index = DocumentIndex()
+        self.index.load()
     
     def list_all_pdfs(self) -> list[Document]:
         """
@@ -101,16 +129,24 @@ class DocumentManager:
         
         # List local PDFs
         if self.local_docs_dir and self.local_docs_dir.exists():
-            for pdf_path in self.local_docs_dir.glob("*.pdf"):
+            for pdf_path in self.local_docs_dir.rglob("*.pdf"):
+                try:
+                    rel_path = str(pdf_path.relative_to(self.local_docs_dir.parent))
+                except Exception:
+                    try:
+                        rel_path = str(pdf_path.relative_to(pdf_path.parents[1]))
+                    except Exception:
+                        rel_path = pdf_path.name
+                rel_path = rel_path.replace("\\", "/") # normalize backslashes on Windows
                 doc = Document(
                     name=pdf_path.name,
-                    source_file=pdf_path.name,
+                    source_file=rel_path,
                     source_type="Local",
                     path=str(pdf_path),
                     last_modified=datetime.fromtimestamp(pdf_path.stat().st_mtime),
                     size_bytes=pdf_path.stat().st_size,
                 )
-                docs[f"Local:{pdf_path.name}"] = doc
+                docs[f"Local:{rel_path}"] = doc
         
         # List SharePoint PDFs
         if self.sharepoint:
