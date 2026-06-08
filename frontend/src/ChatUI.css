@@ -198,14 +198,14 @@ body {
 }
 
 .chat-header {
-  padding: 16px 20px;
+  padding: 12px 20px;
   background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(30, 64, 175, 0.95));
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   color: white;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   flex-shrink: 0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
@@ -213,6 +213,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
+  flex-wrap: wrap;
 }
 
 .dark-theme .chat-header {
@@ -230,9 +231,70 @@ body {
   opacity: 0.9;
 }
 
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .header-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ── Global product filter in header ── */
+.header-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-right: 6px;
+}
+
+.header-filter-label {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.85;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.header-filter-select {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.2s, border-color 0.2s;
+  min-width: 130px;
+}
+
+.header-filter-select option {
+  background: #1e3a5f;
+  color: white;
+}
+
+.header-filter-select:hover,
+.header-filter-select:focus {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.filter-active-badge {
+  font-size: 10px;
+  background: rgba(34, 197, 94, 0.3);
+  border: 1px solid rgba(34, 197, 94, 0.5);
+  color: #bbf7d0;
+  padding: 2px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 600;
 }
 
 .metrics-btn {
@@ -738,3 +800,107 @@ body {
   flex-direction: column;
   gap: 4px;
 }
+
+/* ── Clarification bubble ── */
+.message-content.clarification {
+  background: linear-gradient(135deg, #fef3c7, #fde68a) !important;
+  border: 1px solid #f59e0b !important;
+  border-left: 4px solid #d97706 !important;
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.12);
+}
+
+.dark-theme .message-content.clarification {
+  background: linear-gradient(135deg, #451a03, #78350f) !important;
+  border: 1px solid #92400e !important;
+  border-left: 4px solid #d97706 !important;
+}
+
+.clarification-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(217, 119, 6, 0.25);
+}
+
+.clarification-icon {
+  font-size: 18px;
+  animation: pulse-icon 2s infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+.clarification-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dark-theme .clarification-label {
+  color: #fcd34d;
+}
+
+/* ── Satisfaction note (italic follow-up) ── */
+.satisfaction-note {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+/* ── Horizontal rule in markdown ── */
+.md-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+}
+
+/* ── Product badge in source items ── */
+.product-badge {
+  font-size: 10px;
+  background: var(--primary);
+  color: white;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+/* ── Drawer card badges (score + product) ── */
+.drawer-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.product-pill {
+  font-size: 10px;
+  background: rgba(37, 99, 235, 0.15);
+  color: var(--primary);
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: 700;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+.drawer-doc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-word;
+  margin-top: 2px;
+}
+.source-doc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-word;
+  flex-basis: 100%;
+}
+

@@ -29,6 +29,32 @@ from src.vector_store import VectorStore
 import re
 
 
+def _retrieval_content_quality(text: str) -> int:
+    """Score-based content quality — higher means more substantive content."""
+    score = 0
+    if re.search(r"^\s*\d+[.)]\s+\w", text, re.M):
+        score += 3
+    if re.search(r"^\s*[-*\u2022]\s+\w", text, re.M):
+        score += 2
+    sentences = re.findall(r"[.!?]\s+[A-Z]", text)
+    if len(sentences) >= 2:
+        score += 2
+    elif len(sentences) == 1:
+        score += 1
+    if re.search(r"\w[\w\s]{2,30}:\s+\w", text):
+        score += 1
+    if re.search(r"[A-Za-z]:\\|/[a-z]+/|HKEY_|\.config\b|\.xml\b|\.json\b", text):
+        score += 2
+    if text.count("|") >= 3:
+        score += 2
+    wc = len(text.split())
+    if wc >= 40:
+        score += 2
+    elif wc >= 20:
+        score += 1
+    return score
+
+
 def _chunk_key(hit: dict) -> str:
     return f"{hit['source_file']}|{hit['page']}|{hit['chunk_index']}"
 
@@ -339,15 +365,28 @@ def _complete_section_from_pages(
         if page_body:
             page_texts.append(page_body)
 
+        # Stop once we have enough content AND hit a new section boundary
+        if len(page_texts) >= 3:
+            combined_so_far = "\n".join(page_texts)
+            if _retrieval_content_quality(combined_so_far) >= 4:
+                break
+
     if not page_texts:
         return None
 
     combined = "\n".join(page_texts)
 
-    return extract_complete_section(
+    result = extract_complete_section(
         text=combined,
         heading=heading,
     )
+
+    # Fallback: if section extraction fails (can't locate heading in combined text),
+    # return all gathered pages as raw content — better than returning nothing.
+    if not result and len(combined.strip()) > 80:
+        return combined.strip()
+
+    return result
 
 
 def _expand_adjacent_pages(
@@ -366,7 +405,7 @@ def _expand_adjacent_pages(
 
     # Only run adjacent page/section expansion on the top 15 candidates.
     # Candidates ranked 16+ are highly unlikely to make it into the final context anyway.
-    anchors = sorted(hits, key=lambda x: x.get("score", 0), reverse=True)[:15]
+    anchors = sorted(hits, key=lambda x: x.get("score", 0), reverse=True)[:5]
 
     for h in anchors:
 
@@ -427,7 +466,7 @@ def _expand_adjacent_pages(
             current_p = h["page"]
 
             # Cap expansion pages to prevent excessive DB calls
-            for _ in range(2):
+            for _ in range(1):
 
                 current_p += 1
 
@@ -808,8 +847,27 @@ def retrieve(
             heading=top_match["heading"],
         )
 
-        if not complete_section:
-            continue
+        if not complete_section or _retrieval_content_quality(complete_section) < 2:
+            # ── FALLBACK: Section heading found but content not in same page ──
+            # Instead of skipping, try fetching raw content from the next 2 pages.
+            # This handles the common case where the heading is on a near-empty
+            # page and content starts on the following page.
+            fallback_text = ""
+            for fallback_page in range(
+                int(hit.get("page", 0)) + 1,
+                int(hit.get("page", 0)) + 4,
+            ):
+                fc = store.get_chunks_for_page(hit.get("source_file", ""), fallback_page)
+                if fc:
+                    fallback_text += "\n" + _page_text(fc)
+                if fallback_text.strip():
+                    if _retrieval_content_quality(fallback_text) >= 2:
+                        break
+
+            if not fallback_text.strip():
+                continue  # truly nothing found — skip
+
+            complete_section = fallback_text.strip()
 
         boosted = {
             **hit,
@@ -884,7 +942,7 @@ def retrieve(
     # =====================================================
 
     # Cap candidates sent to CPU Cross-Encoder reranker to minimize latency
-    rerank_limit = min(candidate_k, 15)
+    rerank_limit = min(candidate_k, 8)
     hits = sorted(
         hits,
         key=lambda x: x.get("score", 0),

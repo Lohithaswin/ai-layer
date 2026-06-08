@@ -10,7 +10,6 @@ const EXAMPLE_QUERIES = [
   'What is the PROJECT_MODULE full form?',
 ];
 
-// Fallback logic for localStorage to avoid SSR/hydration issues if any
 const getInitialTheme = () => {
   try {
     return localStorage.getItem('chat_theme') || 'light';
@@ -26,7 +25,7 @@ function formatRelevance(score) {
 }
 
 function renderInline(text, onCitation) {
-  const parts = text.split(/(\*\*.*?\*\*|\[\d+\])/g);
+  const parts = text.split(/(\*\*.*?\*\*|\[\\d+\])/g);
   return parts.map((part, index) => {
     if (part.startsWith('**') && part.endsWith('**')) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
@@ -73,6 +72,18 @@ function renderMarkdown(text, onCitation) {
         </li>
       );
     }
+    // Render horizontal rule
+    if (trimmed === '---') {
+      return <hr key={i} className="md-hr" />;
+    }
+    // Render italic satisfaction note
+    if (trimmed.startsWith('*') && trimmed.endsWith('*') && trimmed.length > 2) {
+      return (
+        <p key={i} className="satisfaction-note">
+          {trimmed.slice(1, -1)}
+        </p>
+      );
+    }
     if (!trimmed) return <br key={i} />;
     return (
       <p key={i} className="md-p">
@@ -87,7 +98,7 @@ export function ChatUI() {
     {
       role: 'assistant',
       content:
-        'Ask questions about your indexed PDFs. Answers use **hybrid search** (semantic + BM25), **cross-encoder re-ranking**, and **parent-page context** for higher accuracy.',
+        'Hello! I\'m your document assistant. Ask me anything about YOUR_PRODUCT — I\'ll search the indexed PDFs and give you precise, sourced answers. If I\'m unsure about what you need, I\'ll ask a quick clarifying question first.',
       sources: [],
     },
   ]);
@@ -103,6 +114,10 @@ export function ChatUI() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [theme, setTheme] = useState(getInitialTheme);
   const [searchHistory, setSearchHistory] = useState([]);
+
+  // Global product filter (persists across queries)
+  const [selectedProduct, setSelectedProduct] = useState('');
+  const [availableProducts, setAvailableProducts] = useState([]);
 
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null);
@@ -127,6 +142,12 @@ export function ChatUI() {
         setBackendStatus('online');
         const docsRes = await fetch(`${API_BASE}/documents`);
         if (docsRes.ok) setDocs(await docsRes.json());
+        // Fetch products for header filter
+        const prodRes = await fetch(`${API_BASE}/products`);
+        if (prodRes.ok) {
+          const pd = await prodRes.json();
+          setAvailableProducts(pd.products || []);
+        }
       } else {
         setBackendStatus('offline');
       }
@@ -137,7 +158,7 @@ export function ChatUI() {
 
   useEffect(() => {
     refreshStatus();
-    const id = setInterval(refreshStatus, 10000);
+    const id = setInterval(refreshStatus, 15000);
     return () => clearInterval(id);
   }, []);
 
@@ -162,7 +183,6 @@ export function ChatUI() {
     setLoading(true);
     setSearchHistory((prev) => Array.from(new Set([text, ...prev])).slice(0, 20));
 
-    // Create a new AbortController for this request
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
@@ -173,65 +193,86 @@ export function ChatUI() {
 
     setMessages((prev) => [...prev, { role: 'user', content: text }]);
 
+    // Use global product filter unless a specific override is provided
+    const effectiveProductFilter = productFilterOverride !== undefined
+      ? productFilterOverride
+      : (selectedProduct || null);
+
     try {
       const response = await fetch(`${API_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          question: text, 
+        body: JSON.stringify({
+          question: text,
           history,
-          product_filter: productFilterOverride || null,
-          file_filter: fileFilterOverride || null
+          product_filter: effectiveProductFilter,
+          file_filter: fileFilterOverride || null,
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) throw new Error(`API error (${response.status})`);
-      
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let answer = '';
-      
+      let isClarification = false;
+
       let assistantMessage = {
         role: 'assistant',
         content: '',
         sources: [],
+        isClarification: false,
       };
-      
+
       setMessages((prev) => [...prev, assistantMessage]);
 
+      let buffer = '';
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
-        const chunkStr = decoder.decode(value, { stream: true });
-        const lines = chunkStr.split('\n');
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
         for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                try {
-                    const data = JSON.parse(line.slice(6));
-                    if (data.chunk) {
-                        answer += data.chunk;
-                        setMessages((prev) => {
-                            const newMessages = [...prev];
-                            newMessages[newMessages.length - 1] = { ...assistantMessage, content: answer };
-                            return newMessages;
-                        });
-                    }
-                    if (data.done) {
-                        assistantMessage.sources = data.sources || [];
-                        setMessages((prev) => {
-                            const newMessages = [...prev];
-                            newMessages[newMessages.length - 1] = { ...assistantMessage, content: answer, sources: data.sources || [] };
-                            return newMessages;
-                        });
-                        if (data.sources && data.sources.length > 0) {
-                            setActiveSources(data.sources);
-                            setDrawerOpen(true);
-                        }
-                    }
-                } catch (e) {}
-            }
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.chunk) {
+                answer += data.chunk;
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1] = {
+                    ...assistantMessage,
+                    content: answer,
+                    isClarification,
+                  };
+                  return newMessages;
+                });
+              }
+              if (data.done) {
+                isClarification = data.clarification === true;
+                assistantMessage.sources = data.sources || [];
+                assistantMessage.isClarification = isClarification;
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1] = {
+                    ...assistantMessage,
+                    content: answer,
+                    sources: data.sources || [],
+                    isClarification,
+                  };
+                  return newMessages;
+                });
+                if (data.sources && data.sources.length > 0) {
+                  setActiveSources(data.sources);
+                  setDrawerOpen(true);
+                }
+              }
+            } catch (e) {}
+          }
         }
       }
     } catch (error) {
@@ -285,7 +326,7 @@ export function ChatUI() {
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div>
-            <div className="brand-title">PDF RAG</div>
+            <div className="brand-title">Doc Assistant</div>
             <div className="brand-sub">Hybrid + Rerank</div>
           </div>
         </div>
@@ -359,17 +400,44 @@ export function ChatUI() {
 
       <div className="chat-main">
         <header className="chat-header">
-          <div>
+          <div className="header-left">
             <h1>Document Assistant</h1>
             <p>Semantic + keyword search · Re-ranked · Page-level context</p>
           </div>
           <div className="header-actions">
+            {/* ── Global Product Filter Dropdown ── */}
+            {availableProducts.length > 0 && (
+              <div className="header-filter-group">
+                <label className="header-filter-label" htmlFor="global-product-filter">
+                  🔍 Filter by Product
+                </label>
+                <select
+                  id="global-product-filter"
+                  className="header-filter-select"
+                  value={selectedProduct}
+                  onChange={(e) => setSelectedProduct(e.target.value)}
+                  title="Filter all queries to this product"
+                >
+                  <option value="">All Products</option>
+                  {availableProducts.map((p) => (
+                    <option key={p} value={p}>
+                      {p.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+                {selectedProduct && (
+                  <span className="filter-active-badge">
+                    Active: {selectedProduct.toUpperCase()}
+                  </span>
+                )}
+              </div>
+            )}
             <button
               type="button"
               className="metrics-btn"
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             >
-              {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+              {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
             </button>
             <button
               type="button"
@@ -400,11 +468,21 @@ export function ChatUI() {
         <div className="chat-container">
           {messages.map((msg, idx) => (
             <div key={idx} className={`message ${msg.role}`}>
-              <div className={`message-content ${msg.error ? 'error' : ''}`}>
+              <div
+                className={`message-content ${msg.error ? 'error' : ''} ${
+                  msg.isClarification ? 'clarification' : ''
+                }`}
+              >
                 {msg.role === 'user' ? (
                   <p>{msg.content}</p>
                 ) : (
                   <>
+                    {msg.isClarification && (
+                      <div className="clarification-header">
+                        <span className="clarification-icon">❓</span>
+                        <span className="clarification-label">Clarification needed</span>
+                      </div>
+                    )}
                     <div className="answer-text">
                       {renderMarkdown(msg.content, (ref) =>
                         handleCitation(ref, msg.sources)
@@ -462,6 +540,9 @@ export function ChatUI() {
                                 )}
                                 <span className="source-meta">
                                   p.{s.page} · {formatRelevance(s.score)}
+                                  {s.product && s.product !== 'unknown' && (
+                                    <span className="product-badge"> · {s.product.toUpperCase()}</span>
+                                  )}
                                 </span>
                               </button>
                             ))}
@@ -498,9 +579,10 @@ export function ChatUI() {
                         </div>
                       </div>
                     )}
+
+                    {/* Per-message source/file/product filter dropdowns */}
                     {((msg.options && msg.options.length > 0) || (msg.sources && msg.sources.length > 0)) && (
                       <div className="options-dropdown-container">
-                        {/* Section / Heading matches dropdown */}
                         {msg.options && msg.options.length > 0 && (
                           <div className="filter-group">
                             <span className="options-dropdown-label">Alternative matching sections:</span>
@@ -521,10 +603,9 @@ export function ChatUI() {
                           </div>
                         )}
 
-                        {/* File Name Filter Dropdown */}
                         {msg.sources && Array.from(new Set(msg.sources.map(s => s.source_file))).length > 1 && (
                           <div className="filter-group">
-                            <span className="options-dropdown-label">Narrow search to a specific document:</span>
+                            <span className="options-dropdown-label">Narrow to a specific document:</span>
                             <select
                               className="options-dropdown"
                               onChange={(e) => {
@@ -543,10 +624,9 @@ export function ChatUI() {
                           </div>
                         )}
 
-                        {/* Product Filter Dropdown */}
                         {msg.sources && Array.from(new Set(msg.sources.map(s => s.product).filter(p => p && p !== 'unknown' && p !== 'demo'))).length > 1 && (
                           <div className="filter-group">
-                            <span className="options-dropdown-label">Narrow search to a specific product:</span>
+                            <span className="options-dropdown-label">Narrow to a specific product:</span>
                             <select
                               className="options-dropdown"
                               onChange={(e) => {
@@ -590,11 +670,11 @@ export function ChatUI() {
                   <span />
                   <span />
                 </div>
-                <p className="loading-label">Generating response...</p>
+                <p className="loading-label">Searching documents & generating response…</p>
                 <div className="message-actions">
-                   <button className="action-btn stop-btn" onClick={stopResponse}>
-                     Stop Generating
-                   </button>
+                  <button className="action-btn stop-btn" onClick={stopResponse}>
+                    Stop Generating
+                  </button>
                 </div>
               </div>
             </div>
@@ -606,7 +686,11 @@ export function ChatUI() {
           <textarea
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            placeholder="Ask about PROJECT_MODULE, PROJECT_NAME, procedures, fields…"
+            placeholder={
+              selectedProduct
+                ? `Ask about ${selectedProduct.toUpperCase()} documents…`
+                : 'Ask about PROJECT_MODULE, PROJECT_NAME, procedures, fields…'
+            }
             disabled={loading}
             rows={1}
             onKeyDown={(e) => {
@@ -640,18 +724,21 @@ export function ChatUI() {
               >
                 <div className="drawer-card-top">
                   <span className="source-ref">[{s.ref}]</span>
-                  <span className="score-pill">{formatRelevance(s.score)}</span>
+                  <div className="drawer-card-badges">
+                    {s.product && s.product !== 'unknown' && (
+                      <span className="product-pill">{s.product.toUpperCase()}</span>
+                    )}
+                    <span className="score-pill">{formatRelevance(s.score)}</span>
+                  </div>
                 </div>
                 <div className="drawer-file">
-                  {s.section
-                    ? s.section
-                    : s.source_file}
+                  {s.section ? s.section : s.source_file}
                 </div>
                 {s.section && (
-                <div className="drawer-doc">
-                  {s.source_file}
-                </div>
-              )}
+                  <div className="drawer-doc">
+                    {s.source_file}
+                  </div>
+                )}
                 <div className="drawer-page">Page {s.page}</div>
                 <p className="excerpt">"{s.excerpt}"</p>
               </div>

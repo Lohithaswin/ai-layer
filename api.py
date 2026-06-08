@@ -1,12 +1,14 @@
 """REST API for the local PDF chatbot."""
 
+import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.rag import ChatResponse, Source, ask
 
-app = FastAPI(title="Local PDF RAG Chatbot", version="0.1.0")
+app = FastAPI(title="Local PDF RAG Chatbot", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,7 +17,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 
 class HistoryMessage(BaseModel):
@@ -102,9 +103,9 @@ def health():
 @app.get("/documents")
 def list_docs():
     from src.vector_store import get_vector_store
-    
+
     store = get_vector_store()
-    
+
     return {
         "files": store.get_unique_files(),
         "products": store.get_unique_products(),
@@ -112,44 +113,115 @@ def list_docs():
     }
 
 
+@app.get("/products")
+def list_products():
+    """Return unique product names indexed in the vector store."""
+    from src.vector_store import get_vector_store
+    from src.doc_registry import get_active_products
+
+    store = get_vector_store()
+    store_products = store.get_unique_products() if hasattr(store, "get_unique_products") else []
+    active = get_active_products()
+
+    # Merge: store products take priority, active products fill in any gaps
+    merged = list(dict.fromkeys(
+        [p for p in store_products if p and p not in ("unknown", "demo")]
+        + [p for p in active if p and p not in ("unknown", "demo")]
+    ))
+    return {"products": sorted(merged)}
+
+
 @app.post("/chat", response_model=ChatResponseOut)
 def chat(body: ChatRequest):
     hist = [{"role": m.role, "content": m.content} for m in body.history]
+    from src.query_context import rewrite_affirmation_query
+    question = rewrite_affirmation_query(body.question, hist)
     return _to_out(ask(
-        body.question,
+        question,
         history=hist,
         product_filter=body.product_filter,
         file_filter=body.file_filter
     ))
 
-import json
-from fastapi.responses import StreamingResponse
+
 from src.retrieval import retrieve
 from src.vector_store import get_vector_store
 from src.rag import _format_context
 from src.llm import SYSTEM_PROMPT, _build_prompt
 from src.llm_stream import generate_stream
+from src.clarifier import should_clarify, generate_clarification, satisfaction_followup
+
 
 @app.post("/chat/stream")
 def chat_stream(body: ChatRequest):
     def event_stream():
         hist = [{"role": m.role, "content": m.content} for m in body.history]
+        from src.query_context import rewrite_affirmation_query
+        question = rewrite_affirmation_query(body.question, hist)
         store = get_vector_store()
+
+        # -------------------------------------------------------
+        # STEP 1: Route the query to understand intent + product
+        # -------------------------------------------------------
+        from src.query_router import route_query
+        plan = route_query(question, hist)
+
+        # Override plan with explicit user filters from the request
+        if body.product_filter:
+            plan.product_filter = body.product_filter
+            from src.query_router import _build_chroma_where
+            plan.chroma_where = _build_chroma_where(body.product_filter, exclude_demo=True)
+
+        if body.file_filter:
+            plan.chroma_where = {"source_file": {"$eq": body.file_filter}}
+
+        # -------------------------------------------------------
+        # STEP 2: Clarification check (LLM-based + rule-based)
+        # -------------------------------------------------------
+        # Only clarify if the user did NOT already specify a product filter
+        if not body.product_filter and not body.file_filter:
+            try:
+                needs_clarify = should_clarify(question, hist, plan)
+            except Exception:
+                needs_clarify = False
+
+            if needs_clarify:
+                try:
+                    store_products = store.get_unique_products() if hasattr(store, "get_unique_products") else []
+                    clarification_q = generate_clarification(
+                        question,
+                        products=[p for p in store_products if p not in ("unknown", "demo")],
+                        history=hist,
+                    )
+                except Exception:
+                    clarification_q = (
+                        "Could you clarify which product you need help with? "
+                        "For example, are you asking about YOUR_PRODUCT?"
+                    )
+
+                yield f"data: {json.dumps({'chunk': clarification_q})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'sources': [], 'clarification': True})}\n\n"
+                return
+
+        # -------------------------------------------------------
+        # STEP 3: Retrieve documents
+        # -------------------------------------------------------
         hits, plan = retrieve(
-            body.question,
+            question,
             store,
             history=hist,
+            plan=plan,
             product_filter=body.product_filter,
             file_filter=body.file_filter,
         )
 
         if not hits:
-            yield f"data: {json.dumps({'chunk': 'The indexed documents do not contain enough information.'})}\n\n"
+            yield f"data: {json.dumps({'chunk': 'The indexed documents do not contain enough information to answer this question. Could you rephrase or clarify what you are looking for?'})}\n\n"
             yield f"data: {json.dumps({'done': True, 'sources': []})}\n\n"
             return
 
         context, sources = _format_context(hits)
-        
+
         history_str = ""
         if hist:
             for msg in hist[-5:]:
@@ -157,15 +229,22 @@ def chat_stream(body: ChatRequest):
                 history_str += f"{role}: {msg.get('content')}\n"
 
         prompt = _build_prompt(
-            body.question,
+            question,
             context,
             plan.intent,
             history_str=history_str,
         )
 
+        # -------------------------------------------------------
+        # STEP 4: Stream the LLM answer
+        # -------------------------------------------------------
         for chunk in generate_stream(prompt, system=SYSTEM_PROMPT):
             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
-            
+
+        # Append satisfaction follow-up
+        followup = satisfaction_followup()
+        yield f"data: {json.dumps({'chunk': followup})}\n\n"
+
         sources_out = [
             {
                 "ref": s.ref,
@@ -179,7 +258,7 @@ def chat_stream(body: ChatRequest):
             }
             for s in sources
         ]
-        
+
         yield f"data: {json.dumps({'done': True, 'sources': sources_out})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

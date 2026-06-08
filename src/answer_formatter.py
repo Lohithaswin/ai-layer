@@ -202,7 +202,7 @@ def _deduplicate_bullet_points(text: str) -> str:
                 if _semantic_similarity(
                     normalized,
                     old,
-                ) > 0.90:
+                ) > 0.95:
                     duplicate = True
                     break
 
@@ -241,7 +241,7 @@ def _deduplicate_paragraphs(text: str) -> str:
             if _semantic_similarity(
                 normalized,
                 old,
-            ) > 0.90:
+            ) > 0.95:
                 duplicate = True
                 break
 
@@ -272,7 +272,7 @@ def _deduplicate_sentences(text: str) -> str:
             lines.append(line)
             continue
 
-        # preserve procedural steps
+        # preserve ALL procedural steps unconditionally — dedup must never drop numbered steps
         if re.match(r'^\d+[.)]\s+', stripped):
             lines.append(line)
             continue

@@ -90,3 +90,68 @@ def resolve_question(
 
     return f"{primary_upper}: {question}", subjects
 
+
+_AFFIRMATION_RE = re.compile(r"^\s*(yes|y|sure|ok|okay|please|yep|do\s+it|go\s+ahead)\b\s*[.?]*$", re.I)
+
+
+def rewrite_affirmation_query(question: str, history: list[dict] | None) -> str:
+    """
+    If the user's question is a short affirmation (e.g. "yes", "sure", "ok")
+    and the last assistant message suggested looking into certain topics/options,
+    rewrite the query to target those topics.
+    """
+    q_strip = question.strip().lower()
+    if not _AFFIRMATION_RE.match(q_strip) or len(q_strip.split()) > 3:
+        return question
+
+    if not history:
+        return question
+
+    # Find the last assistant message
+    last_assistant_msg = None
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            last_assistant_msg = msg.get("content", "")
+            break
+
+    if not last_assistant_msg:
+        return question
+
+    # Look for suggestion patterns, e.g. "Would you like me to look into MFA | Multifactor Authentication or MFA v3.0.0 – Restricted instead?"
+    # Or "Would you like me to look into X or Y?"
+    # Or "Would you like to search for X?"
+    suggestion_patterns = [
+        r"look into (.+?) instead\?",
+        r"look into (.+?)\?",
+        r"search for (.+?)\?",
+        r"reference (.+?)\?",
+        r"discuss (.+?)\?",
+    ]
+
+    for pattern in suggestion_patterns:
+        match = re.search(pattern, last_assistant_msg, re.I)
+        if match:
+            suggestion_content = match.group(1)
+            # Split by " or "
+            options = [opt.strip() for opt in re.split(r"\b(?:or)\b", suggestion_content, flags=re.I)]
+            cleaned_options = []
+            for opt in options:
+                opt = re.sub(r"[.?*]$", "", opt).strip()
+                # Remove quotes or markdown formatting
+                opt = re.sub(r'^["\'`*]+|["\'`*]+$', "", opt)
+                if opt:
+                    cleaned_options.append(opt)
+            if cleaned_options:
+                return " and ".join(cleaned_options)
+
+    # Fallback: if we can't parse specific options, but there was a previous user question,
+    # rewrite to the previous user question so we don't search for "yes"
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            content = msg.get("content", "").strip()
+            if content and not _AFFIRMATION_RE.match(content.lower()):
+                return content
+
+    return question
+
+

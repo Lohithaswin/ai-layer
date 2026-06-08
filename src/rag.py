@@ -262,6 +262,54 @@ def _remove_inline_citations(
 # SOURCE FORMAT
 # =========================================================
 
+def _content_quality_score(text: str) -> int:
+    """
+    Score-based content quality check — no hardcoded char limits.
+    Measures independent signals of substantive content.
+    Returns int: 0 = heading-only, higher = more content.
+    """
+    score = 0
+
+    # Numbered procedural steps (1. step / 1) step)
+    if re.search(r"^\s*\d+[.)]\s+\w", text, re.M):
+        score += 3
+
+    # Bullet points / dash lists
+    if re.search(r"^\s*[-*•]\s+\w", text, re.M):
+        score += 2
+
+    # Multiple complete sentences (ends with . or : and continues)
+    sentences = re.findall(r"[.!?]\s+[A-Z]", text)
+    if len(sentences) >= 2:
+        score += 2
+    elif len(sentences) == 1:
+        score += 1
+
+    # Key: value style content (config/table rows)
+    if re.search(r"\w[\w\s]{2,30}:\s+\w", text):
+        score += 1
+
+    # File paths or registry paths
+    if re.search(r"[A-Za-z]:\\|/[a-z]+/|HKEY_|\.config\b|\.xml\b|\.json\b", text):
+        score += 2
+
+    # Table-like rows with pipe separators
+    if text.count("|") >= 3:
+        score += 2
+
+    # Enough words to be substantive
+    word_count = len(text.split())
+    if word_count >= 40:
+        score += 2
+    elif word_count >= 20:
+        score += 1
+
+    return score
+
+
+_CONTENT_QUALITY_THRESHOLD = 2  # below this = heading-only, no substantive content
+
+
 def _format_context(
     hits: list[dict],
 ) -> tuple[str, list[Source]]:
@@ -297,15 +345,18 @@ def _format_context(
             or ""
         )
 
+        heading_only = _content_quality_score(clean_body) < _CONTENT_QUALITY_THRESHOLD
+
+        # Build excerpt (shown in source card — always 600 chars)
         if section_name:
             excerpt = (
                 f"[SECTION: {section_name}]\n"
-                + clean_body[:400]
+                + clean_body[:600]
             )
         else:
-            excerpt = clean_body[:400]
+            excerpt = clean_body[:600]
 
-        if len(clean_body) > 400:
+        if len(clean_body) > 600:
             excerpt += "..."
 
         sources.append(
@@ -339,13 +390,24 @@ def _format_context(
             )
         )
 
-        # clean manual text only
-        if section_name:
-            blocks.append(
-                f"[SECTION: {section_name}]\n{clean_body}"
-            )
+        # Build LLM context block
+        if heading_only:
+            # Tell the LLM explicitly — do NOT invent content for this
+            if section_name:
+                blocks.append(
+                    f"[SECTION: {section_name}]\n"
+                    f"[NOTE: Section heading found but no body content was indexed for this section. "
+                    f"Do NOT invent content for '{section_name}'.]"
+                )
+            # else: skip entirely — no section name and no content is useless
         else:
-            blocks.append(clean_body)
+            if section_name:
+                blocks.append(
+                    f"[SECTION: {section_name}]\n{clean_body}"
+                )
+            else:
+                blocks.append(clean_body)
+
     return (
         "\n\n".join(blocks),
         sources,
@@ -386,6 +448,9 @@ def ask(
     product_filter: str | None = None,
     file_filter: str | None = None,
 ) -> ChatResponse:
+
+    from src.query_context import rewrite_affirmation_query
+    question = rewrite_affirmation_query(question, history)
 
     start_time = time.time()
 
@@ -536,14 +601,9 @@ def ask(
             )
         )
 
-        # Do not clean PDF-level boilerplate headers/footers on the LLM's generated response
+        # Do not run _remove_duplicate_content on the LLM's generated answer
+        # (it removes procedural steps). Cleanup is handled by answer_formatter only.
         pass
-
-        answer = (
-            _remove_duplicate_content(
-                answer
-            )
-        )
 
     except OllamaTimeoutError as e:
 

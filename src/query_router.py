@@ -293,6 +293,9 @@ def route_query(question: str, history: list[dict] | None = None) -> QueryPlan:
     """
     Produce a retrieval plan from the user question and optional chat history.
     """
+    from src.query_context import rewrite_affirmation_query
+    question = rewrite_affirmation_query(question, history)
+
     q = question.strip()
     subjects = collect_subjects(q, history)
 

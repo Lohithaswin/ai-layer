@@ -12,19 +12,19 @@ The system is composed of a **React + Vite Frontend**, a **FastAPI Backend REST 
 graph TD
     A[docs/ folder] -->|1. Ingest Batch| B[PyMuPDF Page Parser]
     B -->|2. Table & Text Blocks| C[Doc Classifier & Metadata Tagger]
-    C -->|3. Parent-Child Chunking| D[(ChromaDB Dense Store)]
-    C -->|3. Lexical Tokenization| E[(BM25 Sparse Store)]
+    C -->|3. Parent-Child Chunking| D[(PostgreSQL pgvector Dense Store)]
+    C -->|3. Lexical Tokenization| E[(PostgreSQL FTS Sparse Store)]
     
     F[User Query] -->|4. Route & Expand| G[Query Router]
     G -->|5. Filtered Dense Query| D
     G -->|5. Filtered Sparse Query| E
-    D & E -->|6. Reciprocal Rank Fusion| H[Fused Candidate List]
+    D & E -->|6. Hybrid Score Fusion| H[Fused Candidate List]
     H -->|7. Section Matching & Boosting| I[Section Matcher]
     I -->|8. Cross-Encoder Reranking| J[BAAI Reranker]
     J -->|9. Page Backtracking/Focusing| K[Context Focus Module]
     K -->|10. Grounded Context| L[Ollama Local LLM]
     L -->|11. Cleanup & Verify| M[Answer Verifier & Formatter]
-    M -->|12. Final Response| N[React Chat Interface]
+    M -->|12. SSE Streaming Response| N[React Chat Interface]
 ```
 
 ---
@@ -43,10 +43,9 @@ graph TD
 *   **[src/doc_registry.py](file:///C:/path/to/ai-layer/src/doc_registry.py)**: Document classification module. Parses filenames dynamically using regex to classify PDFs into specific products (e.g. `project_name`, `project_module`), document types (`user_manual`, `install_guide`, `security_manual`), versions, and flags demo files.
 
 ### 🔍 Retrieval & Re-Ranking
-*   **[src/vector_store.py](file:///C:/path/to/ai-layer/src/vector_store.py)**: Interfaces with **ChromaDB** using `all-MiniLM-L6-v2` embeddings. Manages collection creation, vector queries, batching, metadata tags, and page segment extraction.
-*   **[src/bm25_store.py](file:///C:/path/to/ai-layer/src/bm25_store.py)**: Manages the sparse retrieval corpus via the `rank-bm25` library, persisting indexes to disk using python pickle.
-*   **[src/retrieval.py](file:///C:/path/to/ai-layer/src/retrieval.py)**: Orchestrates metadata-filtered hybrid search. Blends dense and sparse search results via Reciprocal Rank Fusion (RRF). Detects section-level matches, handles query intent constraints, boosts section content, triggers page-level backtracking, and performs cross-encoder re-ranking.
-*   **[src/reranker.py](file:///C:/path/to/ai-layer/src/reranker.py)**: Connects to a local sentence-transformer `BAAI/bge-reranker-base` cross-encoder to dynamically re-evaluate candidate-context alignment scores.
+*   **[src/vector_store.py](file:///C:/path/to/ai-layer/src/vector_store.py)** & **[src/postgres_store.py](file:///C:/path/to/ai-layer/src/postgres_store.py)**: Interfaces with **PostgreSQL** using `pgvector` for dense semantic embeddings (`all-MiniLM-L6-v2`) and native Full-Text Search (FTS) for sparse retrieval. Manages table creation, vector similarity search, BM25-style metadata filtering, and chunk tracking.
+*   **[src/retrieval.py](file:///C:/path/to/ai-layer/src/retrieval.py)**: Orchestrates metadata-filtered hybrid search. Blends dense (semantic) and sparse (keyword) search results by computing weighted fused scores. Detects section-level matches, limits chunk crossover, triggers page-level backtracking, and performs precise cross-encoder re-ranking.
+*   **[src/reranker.py](file:///C:/path/to/ai-layer/src/reranker.py)**: Uses a local sentence-transformer `BAAI/bge-reranker-base` cross-encoder to dynamically score and rerank all retrieved candidates against the exact user query, effectively eliminating out-of-context matching.
 *   **[src/context_focus.py](file:///C:/path/to/ai-layer/src/context_focus.py)**: Implements context collapse for procedural questions. Identifies if the query is a procedure, collapses retrieval to the best-matching consecutive page sequences within dominant manuals, and prevents text-bleeding from unrelated topics.
 *   **[src/section_matcher.py](file:///C:/path/to/ai-layer/src/section_matcher.py)**: Strictly matches document headings with queries, detects section transitions (parent-child section hierarchies, notes, warnings, table continuations), and extracts complete sections for LLM contexts.
 
@@ -54,18 +53,18 @@ graph TD
 *   **[src/query_router.py](file:///C:/path/to/ai-layer/src/query_router.py)**: Detects intent classification (`version_history`, `definition`, `field_detail`, `architecture`, `how_to`, `general`), resolves product focuses, and expands queries into multi-angle search queries.
 *   **[src/query_context.py](file:///C:/path/to/ai-layer/src/query_context.py)**: Handles conversation context. Reconstructs implicit subjects, resolves acronym references, and tracks follow-up contexts.
 *   **[src/rag.py](file:///C:/path/to/ai-layer/src/rag.py)**: Main RAG orchestrator. Intercepts ambiguous section titles (triggering an early-return selection prompt), calls Ollama generation, and applies formatting and verification.
-*   **[src/llm.py](file:///C:/path/to/ai-layer/src/llm.py)**: Connects to **Ollama** via HTTP request payloads. Incorporates system prompt rules to enforce anti-hallucination and step consistency.
+*   **[src/llm.py](file:///C:/path/to/ai-layer/src/llm.py)** & **[src/llm_stream.py](file:///C:/path/to/ai-layer/src/llm_stream.py)**: Connects to **Ollama** via HTTP request payloads. Provides synchronous and streaming text generation while enforcing system prompt rules to prevent hallucination.
 *   **[src/verifier.py](file:///C:/path/to/ai-layer/src/verifier.py)**: Cross-corpus integrity verifier. Enforces product consistency (blocking answers that mix YOUR_PRODUCT manuals), validates software release version claims, and flags cross-corpus leakage.
 *   **[src/answer_formatter.py](file:///C:/path/to/ai-layer/src/answer_formatter.py)**: Cleans LLM output by deduplicating paragraphs, steps, and bullet points. Strips leaked document headers, figure references, and standalone citation blocks.
 
 ### 🖥 Interfaces & Configuration
-*   **[api.py](file:///C:/path/to/ai-layer/api.py)**: REST API exposed via FastAPI. Exposes `/chat` (with chat history and JSON request schemas), `/documents`, and `/health` endpoints.
+*   **[api.py](file:///C:/path/to/ai-layer/api.py)**: REST API exposed via FastAPI. Exposes `/chat`, `/chat/stream` (utilizing **Server-Sent Events** for streaming token responses), `/documents`, and `/health` endpoints.
 *   **[ui.py](file:///C:/path/to/ai-layer/ui.py)**: Simple web interface written using Gradio for rapid backend testing.
 *   **[src/chat_cli.py](file:///C:/path/to/ai-layer/src/chat_cli.py)**: Terminal-based interact-loop.
 *   **[src/config.py](file:///C:/path/to/ai-layer/src/config.py)**: Holds central path bindings, models, hyperparameters, and environment variable overrides.
 
 ### 🌐 Frontend Client
-*   **[frontend/src/ChatUI.jsx](file:///C:/path/to/ai-layer/frontend/src/ChatUI.jsx)**: Polished React component managing chat history state, filters, copy/export, search history, and response abortion.
+*   **[frontend/src/ChatUI.jsx](file:///C:/path/to/ai-layer/frontend/src/ChatUI.jsx)**: Polished React component that natively consumes Server-Sent Events (SSE) to stream answers character-by-character. Manages chat history state, filtering menus, copy/export, search history, and response abortion.
 *   **[frontend/src/ChatUI.css](file:///C:/path/to/ai-layer/frontend/src/ChatUI.css)**: Glossy layout styles utilizing glassmorphism overlays, animations, and CSS variables for light/dark themes.
 
 ---
@@ -110,13 +109,17 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-### 2. Local LLM Setup (Ollama)
-1. Download and run [Ollama](https://ollama.com).
-2. Pull the default technical LLM:
+### 2. Local PostgreSQL & LLM Setup
+1. **Start the PostgreSQL database** (with `pgvector`) using the provided Docker Compose file:
+   ```powershell
+   docker-compose up -d
+   ```
+2. Download and run [Ollama](https://ollama.com).
+3. Pull the default technical LLM:
    ```powershell
    ollama pull llama3.2
    ```
-3. Set `OLLAMA_MODEL=llama3.2` and `OLLAMA_TIMEOUT=600` inside your `.env` file.
+4. Set the correct `DATABASE_URL` and ensure `OLLAMA_MODEL=llama3.2` and `USE_RERANKER=true` are configured in your `.env` file.
 
 ### 3. Document Ingestion
 
@@ -132,14 +135,19 @@ python -m src.ingest_batch --mode full
 
 ### 4. Running the Applications
 
-#### Start the FastAPI Backend Server
+To use the full application, you must run both the backend server and the frontend client concurrently. Open **two separate terminal windows**.
+
+#### Terminal 1: Start the FastAPI Backend Server
 ```powershell
+# Ensure your virtual environment is activated
+.\.venv\Scripts\Activate.ps1
 uvicorn api:app --reload --port 8000
 ```
 
-#### Start the React Frontend Application
+#### Terminal 2: Start the React Frontend Application
 ```powershell
 cd frontend
+# Install Node dependencies (first time only)
 npm install
 npm run dev
 ```

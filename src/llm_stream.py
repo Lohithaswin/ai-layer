@@ -11,6 +11,7 @@ def generate_stream(prompt: str, system: str | None = None):
         "options": {
             "temperature": 0.2,
             "num_predict": OLLAMA_NUM_PREDICT,
+            "num_ctx": 4096,
         },
     }
     if system:

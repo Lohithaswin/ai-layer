@@ -15,7 +15,7 @@ EXTRACT_TABLES = os.getenv("EXTRACT_TABLES", "true").lower() in ("1", "true", "y
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 OLLAMA_TIMEOUT = max(float(os.getenv("OLLAMA_TIMEOUT", "900")), 900.0)
-OLLAMA_NUM_PREDICT = max(int(os.getenv("OLLAMA_NUM_PREDICT", "3072")), 3072)
+OLLAMA_NUM_PREDICT = max(int(os.getenv("OLLAMA_NUM_PREDICT", "1800")), 1800)
 
 EMBEDDING_MODEL = os.getenv(
     "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
@@ -24,8 +24,8 @@ RERANKER_MODEL = os.getenv(
     "RERANKER_MODEL", "BAAI/bge-reranker-base"
 )
 
-TOP_K = int(os.getenv("TOP_K", "5"))
-RETRIEVAL_CANDIDATES = int(os.getenv("RETRIEVAL_CANDIDATES", "20"))
+TOP_K = int(os.getenv("TOP_K", "7"))
+RETRIEVAL_CANDIDATES = int(os.getenv("RETRIEVAL_CANDIDATES", "15"))
 HYBRID_DENSE_WEIGHT = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.5"))
 HYBRID_SPARSE_WEIGHT = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.5"))
 RRF_K = int(os.getenv("RRF_K", "60"))
@@ -43,7 +43,7 @@ CHUNK_OVERLAP = CHILD_CHUNK_OVERLAP
 
 USE_HYBRID_SEARCH = os.getenv("USE_HYBRID_SEARCH", "true").lower() in ("1", "true", "yes")
 USE_RERANKER = os.getenv("USE_RERANKER", "false").lower() in ("1", "true", "yes")
-MAX_EXPANDED_QUERIES = int(os.getenv("MAX_EXPANDED_QUERIES", "10"))
+MAX_EXPANDED_QUERIES = int(os.getenv("MAX_EXPANDED_QUERIES", "5"))
 
 # Collapse retrieval to one page/section for procedural questions (scalable, not per-topic)
 CONTEXT_FOCUS_ENABLED = os.getenv("CONTEXT_FOCUS_ENABLED", "true").lower() in (
@@ -56,7 +56,7 @@ CONTEXT_FOCUS_PAGE_GAP = float(os.getenv("CONTEXT_FOCUS_PAGE_GAP", "0.35"))
 MAX_CONTEXT_CHARS = int(
     os.getenv(
         "MAX_CONTEXT_CHARS",
-        "9000"
+        "10000"
     )
 )
 MAX_SECTION_PAGES = int(os.getenv("MAX_SECTION_PAGES", "25"))
