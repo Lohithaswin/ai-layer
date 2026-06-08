@@ -25,7 +25,7 @@ def _pick_primary_subject(acronyms: list[str]) -> str | None:
 def collect_subjects(question: str, history: list[dict] | None) -> list[str]:
     """Acronyms from the current question plus recent turns."""
     subjects = extract_acronyms(question)
-    for msg in (history or [])[-8:]:
+    for msg in reversed((history or [])[-8:]):
         content = (msg.get("content") or "").strip()
         if not content:
             continue

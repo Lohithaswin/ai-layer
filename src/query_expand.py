@@ -120,6 +120,22 @@ def is_architecture_question(question: str) -> bool:
     )
 
 
+def is_comparison_question(question: str) -> bool:
+    q = question.lower()
+    return any(
+        w in q
+        for w in (
+            "compare",
+            "difference",
+            "versus",
+            "vs",
+            "distinguish",
+            "relationship",
+            "comparison",
+        )
+    )
+
+
 def expanded_queries(question: str, subjects: list[str] | None = None) -> list[str]:
     """Return unique queries: original + helpers for definition lookup + multi-angle queries."""
     queries = [question.strip()]
@@ -181,6 +197,13 @@ def expanded_queries(question: str, subjects: list[str] | None = None) -> list[s
             ]
         )
 
+    # For mapping roles/groups
+    if "role" in q_lower and "group" in q_lower:
+        queries.extend([
+            f"{question} Add Groups to Roles Manage PAM Groups",
+            "mapping of Linux users to PROJECT_NAME roles"
+        ])
+
     if is_procedure_question(question):
         terms = list(query_terms(question))
         if len(terms) > 1:
@@ -228,6 +251,13 @@ def expanded_queries(question: str, subjects: list[str] | None = None) -> list[s
                     f"{topic} definition",
                     f"about {topic}",
                 ])
+
+    # FAT/SAT test document expansion
+    if "fat " in q_lower or "sat " in q_lower or "fat" in q_lower.split() or "sat" in q_lower.split():
+        queries.extend([
+            f"{question} Factory Acceptance Test Site Acceptance Test",
+            f"{question} Test Description Result Notes table"
+        ])
 
     if subjects and len(subjects) > 1:
         for subj in subjects:

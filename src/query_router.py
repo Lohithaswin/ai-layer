@@ -14,6 +14,7 @@ from src.query_expand import (
     is_definition_question,
     is_field_detail_question,
     is_version_history_question,
+    is_comparison_question,
 )
 
 _SHORT_ACRONYM_RE = re.compile(r"^[A-Za-z]{2,8}\??$")
@@ -60,6 +61,8 @@ def _detect_intent(question: str, search_q: str) -> str:
         return "architecture"
     if is_procedure_question(question) or is_procedure_question(search_q):
         return "how_to"
+    if is_comparison_question(question) or is_comparison_question(search_q):
+        return "comparison"
     return "general"
 
 
@@ -219,6 +222,23 @@ def _intent_extra_queries(intent: str, subjects: list[str], search_q: str, histo
                     f"{ac_upper} Security Management architecture client-server",
                     f"{ac_upper} subsystem services layout structure",
                     "User Management Security Logging Security Integrity",
+                ]
+            )
+
+    elif intent == "comparison":
+        if len(subjects) >= 2:
+            extra.extend(
+                [
+                    f"difference between {subjects[0]} and {subjects[1]}",
+                    f"{subjects[0]} vs {subjects[1]}",
+                    f"compare {subjects[0]} {subjects[1]}",
+                ]
+            )
+        else:
+            extra.extend(
+                [
+                    f"{search_q} differences",
+                    f"compare {search_q}",
                 ]
             )
 

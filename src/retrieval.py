@@ -420,6 +420,7 @@ def _expand_adjacent_pages(
 
         for p in (
             h["page"] - 1,
+            h["page"],
             h["page"] + 1,
         ):
 
@@ -909,35 +910,6 @@ def retrieve(
     _boost_matching_doc_type(hits, plan.doc_type_filter)
 
     # =====================================================
-    # PAGE EXPANSION
-    # =====================================================
-
-    if (
-        plan.intent in (
-            "definition",
-            "architecture",
-            "version_history",
-            "how_to",
-        )
-        or plan.focus_context
-    ):
-        _expand_adjacent_pages(
-            hits,
-            store,
-            expand_further=True,
-        )
-
-    elif (
-        plan.intent == "field_detail"
-        and not plan.focus_context
-    ):
-        _expand_adjacent_pages(
-            hits,
-            store,
-            expand_further=False,
-        )
-
-    # =====================================================
     # RERANK
     # =====================================================
 
@@ -963,6 +935,35 @@ def retrieve(
                 f"(Page {r['page']})"
             )
 
+    # =====================================================
+    # PAGE EXPANSION
+    # =====================================================
+
+    if (
+        plan.intent in (
+            "definition",
+            "architecture",
+            "version_history",
+            "how_to",
+        )
+        or plan.focus_context
+    ):
+        _expand_adjacent_pages(
+            reranked,
+            store,
+            expand_further=True,
+        )
+
+    elif (
+        plan.intent == "field_detail"
+        and not plan.focus_context
+    ):
+        _expand_adjacent_pages(
+            reranked,
+            store,
+            expand_further=False,
+        )
+
     limit = (
         final_k + 2
         if plan.intent == "field_detail"
@@ -976,9 +977,10 @@ def retrieve(
             plan.search_question,
         )
 
-        limit = min(
+        # Use a larger limit for procedures to prevent truncation across duplicate manuals
+        limit = max(
             limit,
-            CONTEXT_FOCUS_MAX_SOURCES,
+            15,
         )
 
     return _dedupe_by_parent(

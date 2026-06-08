@@ -183,56 +183,7 @@ def _similar(
     ).ratio()
 
 
-def _remove_duplicate_content(
-    text: str,
-) -> str:
-    """
-    Remove semantic duplicates.
-    """
-
-    lines = text.split("\n")
-
-    unique: list[str] = []
-
-    for line in lines:
-
-        stripped = line.strip()
-
-        if not stripped:
-            continue
-
-        duplicate = False
-
-        for existing in unique:
-
-            similarity = _similar(
-                stripped,
-                existing,
-            )
-
-            if similarity > 0.88:
-
-                duplicate = True
-
-                # keep richer line
-                if (
-                    len(stripped)
-                    > len(existing)
-                ):
-                    unique.remove(
-                        existing
-                    )
-
-                    unique.append(
-                        stripped
-                    )
-
-                break
-
-        if not duplicate:
-            unique.append(stripped)
-
-    return "\n".join(unique)
+# Removed _remove_duplicate_content as it destroys tables and checklists
 
 
 def _remove_inline_citations(
@@ -333,12 +284,6 @@ def _format_context(
             )
         )
 
-        clean_body = (
-            _remove_duplicate_content(
-                clean_body
-            )
-        )
-
         section_name = (
             hit.get("section_title")
             or hit.get("section_match")
@@ -390,21 +335,18 @@ def _format_context(
             )
         )
 
+        heading_only = _content_quality_score(clean_body) < _CONTENT_QUALITY_THRESHOLD
+
         # Build LLM context block
-        if heading_only:
-            # Tell the LLM explicitly — do NOT invent content for this
-            if section_name:
-                blocks.append(
-                    f"[SECTION: {section_name}]\n"
-                    f"[NOTE: Section heading found but no body content was indexed for this section. "
-                    f"Do NOT invent content for '{section_name}'.]"
-                )
-            # else: skip entirely — no section name and no content is useless
+        if heading_only and section_name and len(clean_body.split()) < 30:
+            blocks.append(
+                f"[SECTION: {section_name}]\n{clean_body}\n"
+                f"[NOTE: Section heading found but no body content was indexed for this section. "
+                f"Do NOT invent content for '{section_name}'.]"
+            )
         else:
             if section_name:
-                blocks.append(
-                    f"[SECTION: {section_name}]\n{clean_body}"
-                )
+                blocks.append(f"[SECTION: {section_name}]\n{clean_body}")
             else:
                 blocks.append(clean_body)
 

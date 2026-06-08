@@ -16,6 +16,15 @@ _DOC_TYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("change_log", re.compile(r"change\s*log|changelog", re.I)),
 ]
 
+_STOP_PRODUCTS = frozenset({
+    "release", "change", "changelog", "how", "what", "user", "admin", "guide",
+    "manual", "document", "test", "fat", "sat", "site", "factory", "installation",
+    "install", "security", "overview", "architecture", "api", "deployment", "setup",
+    "configuration", "config", "appendix", "index", "table", "glossary", "introduction",
+    "intro", "welcome", "the", "a", "an", "for", "to", "in", "on", "at", "by", "from",
+    "with", "about", "into", "through", "during", "before", "after", "above", "below"
+})
+
 
 @dataclass(frozen=True)
 class DocMetadata:
@@ -75,7 +84,7 @@ def classify_pdf(path: Path) -> DocMetadata:
             first = parts[0]
             # Alphanumeric between 2 and 10 characters represents the product code
             if 2 <= len(first) <= 10 and re.match(r"^[A-Za-z0-9]+$", first):
-                if first.lower() not in ("release", "change", "changelog"):
+                if first.lower() not in _STOP_PRODUCTS:
                     product = first.lower()
 
     doc_type = "unknown"
@@ -103,7 +112,7 @@ def get_active_products() -> set[str]:
     if DOCS_DIR.exists():
         for path in DOCS_DIR.rglob("*.pdf"):
             meta = classify_pdf(path)
-            if meta.product and meta.product not in ("unknown", "demo"):
+            if meta.product and meta.product not in ("unknown", "demo") and meta.product not in _STOP_PRODUCTS:
                 products.add(meta.product.lower())
     return products
 
