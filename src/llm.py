@@ -55,7 +55,7 @@ def generate(
         "options": {
             "temperature": 0.2,
             "num_predict": OLLAMA_NUM_PREDICT,
-            "num_ctx": 4096,
+            "num_ctx": 8192,
         },
     }
 
@@ -104,7 +104,7 @@ Your goal is to answer the user's question directly, clearly, and completely in 
 
 Follow these rules STRICTLY:
 1. Answer the question directly and professionally. Do not copy irrelevant background information, unrelated tables, or boilerplate text from the context.
-2. If the user asks for a procedure, format, checklist, or "how-to", output ALL the specific, actionable steps or format details found in the context — do not stop early or abbreviate. Number every step.
+2. If the user asks for a procedure, format, checklist, or "how-to", scan the ENTIRE context from top to bottom and output ALL numbered steps in sequential order (1, 2, 3, 4...). Steps may be split across separate context blocks or pages — collect them all. Never stop partway through a numbered sequence.
 3. Be helpful, conversational, and professional. Use the conversation history to resolve referential terms or follow-up context (e.g. "give steps" refers to the previous topic discussed).
 4. Stay strictly grounded in the context. Do not invent steps, configurations, directories, or facts. Do not bring in any external knowledge, brand names, company names, or product names unless explicitly mentioned in the context.
 5. Never expand acronyms (like PROJECT_MODULE, PROJECT_NAME, WPP, SFS, PKI, MFA) using external knowledge. If the full name is not written in the context, leave it as the acronym.
@@ -119,20 +119,69 @@ Follow these rules STRICTLY:
 # CONTEXT BUILDING
 # =========================================================
 
+_BOILERPLATE_RE = re.compile(
+    r"^("
+    r"PROJECT_NAME.*v\d+.*|PROJECT_MODULE.*v\d+.*|"
+    r"PROJECT_MODULE\s+\w.*(?:Guide|Manual)|"
+    r"PROJECT_NAME\s+\w.*(?:Guide|Manual)|"
+    r"\u00a9.*|©.*|"
+    r".*All\s+rights\s+reserved.*|"
+    r"Restricted|Confidential|"
+    r"Page\s+\d+|"
+    r"Figure\s+\d+[.:]?|"
+    r"Table\s+\d+[.:]?"
+    r")$",
+    re.I,
+)
+
+
+def _strip_boilerplate_lines(text: str) -> str:
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if _BOILERPLATE_RE.match(s):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
 def _build_context(
     hits: list[dict],
 ) -> str:
 
-    sections = []
+    seen_files: list[str] = []
+    file_hits: dict[str, list[dict]] = {}
+    for hit in hits:
+        sf = hit.get("source_file", "")
+        if sf not in file_hits:
+            seen_files.append(sf)
+            file_hits[sf] = []
+        file_hits[sf].append(hit)
 
+    for sf in seen_files:
+        file_hits[sf].sort(key=lambda h: int(h.get("page", 0)))
+
+    ordered_hits: list[dict] = []
+    for sf in seen_files:
+        ordered_hits.extend(file_hits[sf])
+
+    sections = []
     seen = set()
 
-    for hit in hits:
+    for hit in ordered_hits:
 
         body = (
             hit.get("parent_text")
             or hit.get("text", "")
         ).strip()
+
+        if not body:
+            continue
+
+        body = _strip_boilerplate_lines(body)
 
         if not body:
             continue
@@ -181,7 +230,7 @@ def _build_prompt(
 - If any context block contains "[NOTE: Section heading found but no body content...]", do NOT invent content for that section — say you couldn't find the full content.
 - If the context does not contain any relevant information, say "I cannot find the instructions in the provided documents." """
     else:
-        instruction_block = """- Extract only the specific, actionable steps, format details, or configurations requested. Do not copy unrelated tables, lists of ports, or background details.
+        instruction_block = """- The context may contain steps split across multiple blocks or pages. Scan the ENTIRE context from top to bottom and collect ALL numbered steps in sequential order (1, 2, 3, 4, 5...). Do not stop after the first block — if a numbered sequence continues in a later block, include those steps too. Never truncate a numbered sequence mid-way.
 - Stay strictly grounded in the provided Context. Do not invent steps, configurations, buttons, or directories.
 - CRITICAL: If the user asked for a specific format or checklist (e.g., FAT format, SAT checklist), only provide that exact format from context. Never substitute a different procedure.
 - CRITICAL: If any context block contains "[NOTE: Section heading found but no body content...]", do NOT invent content — say "The document contains this section but the detailed content was not indexed. Please check the original document."
