@@ -101,6 +101,10 @@ def resolve_primary_product(
     if len(mentioned_current) == 1:
         return mentioned_current[0]
     elif len(mentioned_current) > 1:
+        suites = {"project_name", "project_module", "wpp"}
+        components = [p for p in mentioned_current if p not in suites]
+        if len(components) == 1:
+            return components[0]
         # Multiple products mentioned (e.g. comparing YOUR_PRODUCT) - do not filter by single product
         return None
             

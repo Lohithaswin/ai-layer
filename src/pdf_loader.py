@@ -149,6 +149,10 @@ def load_pdf_chunks(pdf_path: Path, metadata: dict | None = None) -> list[dict]:
     chunks: list[dict] = []
     chunk_index = 0
 
+    import re
+    _SECTION_RE = re.compile(r"(?:^|\n)\s*((?:\d+(?:\.\d+)*\.?|Appendix\s+[A-Z])\s+[A-Z][^\n]{4,100})", re.I | re.M)
+    current_section = None
+
     try:
         for page_num in range(len(doc)):
             page = doc[page_num]
@@ -158,9 +162,17 @@ def load_pdf_chunks(pdf_path: Path, metadata: dict | None = None) -> list[dict]:
 
             parent_id = f"{rel_path}|{page_num + 1}"
 
+            page_sections = []
+            for match in _SECTION_RE.finditer(page_text):
+                page_sections.append((match.start(), match.group(1).strip()))
+
             for piece, start, end in _split_child_chunks(
                 page_text, CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP
             ):
+                for sec_start, sec_title in page_sections:
+                    if sec_start <= start + (CHILD_CHUNK_SIZE // 2):
+                        current_section = sec_title
+
                 row = {
                     "text": piece,
                     "parent_text": _build_child_parent_text(
@@ -170,6 +182,7 @@ def load_pdf_chunks(pdf_path: Path, metadata: dict | None = None) -> list[dict]:
                     "source_file": rel_path,
                     "page": page_num + 1,
                     "chunk_index": chunk_index,
+                    "section_title": current_section,
                 }
                 if metadata:
                     row.update(metadata)

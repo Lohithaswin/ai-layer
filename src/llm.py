@@ -33,9 +33,13 @@ class OllamaTimeoutError(Exception):
 
 
 def ollama_available() -> bool:
+    import src.config as _cfg
+    if not _cfg.GROQ_API_KEY:
+        return False
     try:
         r = httpx.get(
-            f"{OLLAMA_BASE_URL}/api/tags",
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {_cfg.GROQ_API_KEY}"},
             timeout=5.0,
         )
         return r.status_code == 200
@@ -47,34 +51,36 @@ def generate(
     prompt: str,
     system: str | None = None,
 ) -> str:
+    import src.config as _cfg
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
 
     payload: dict = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
+        "model": _cfg.OLLAMA_MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": _cfg.OLLAMA_NUM_PREDICT,
         "stream": False,
-        "options": {
-            "temperature": 0.2,
-            "num_predict": OLLAMA_NUM_PREDICT,
-            "num_ctx": 8192,
-        },
     }
 
-    if system:
-        payload["system"] = system
-
     timeout = httpx.Timeout(
-        OLLAMA_TIMEOUT,
+        _cfg.OLLAMA_TIMEOUT,
         connect=30.0,
     )
 
     try:
 
         with httpx.Client(
-            timeout=timeout
+            timeout=timeout,
+            verify=False,
+            headers={"Authorization": f"Bearer {_cfg.GROQ_API_KEY}"}
         ) as client:
 
             r = client.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
+                "https://api.groq.com/openai/v1/chat/completions",
                 json=payload,
             )
 
@@ -82,15 +88,17 @@ def generate(
 
             return (
                 r.json()
-                .get("response", "")
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
                 .strip()
             )
 
     except httpx.ReadTimeout as e:
 
         raise OllamaTimeoutError(
-            f"Ollama did not finish within "
-            f"{int(OLLAMA_TIMEOUT)}s."
+            f"Groq API did not finish within "
+            f"{int(_cfg.OLLAMA_TIMEOUT)}s."
         ) from e
 
 
@@ -103,15 +111,15 @@ You are an enterprise technical support chatbot for YOUR_PRODUCT, SFS, MFA and r
 Your goal is to answer the user's question directly, clearly, and completely in natural human language, based ONLY on the provided context.
 
 Follow these rules STRICTLY:
-1. Answer the question directly and professionally. Do not copy irrelevant background information, unrelated tables, or boilerplate text from the context.
-2. If the user asks for a procedure, format, checklist, or "how-to", scan the ENTIRE context from top to bottom and output ALL numbered steps in sequential order (1, 2, 3, 4...). Steps may be split across separate context blocks or pages — collect them all. Never stop partway through a numbered sequence.
+1. Answer the question directly and professionally. Do not include irrelevant background information.
+2. If the user asks for a procedure or "how-to", scan the ENTIRE context from top to bottom and output ALL numbered steps in sequential order (1, 2, 3, 4...). Steps may be split across separate context blocks or pages — collect them all. If the user asks for a format, table, or checklist, provide the exact format without forcing it into numbered steps.
 3. Be helpful, conversational, and professional. Use the conversation history to resolve referential terms or follow-up context (e.g. "give steps" refers to the previous topic discussed).
 4. Stay strictly grounded in the context. Do not invent steps, configurations, directories, or facts. Do not bring in any external knowledge, brand names, company names, or product names unless explicitly mentioned in the context.
 5. Never expand acronyms (like PROJECT_MODULE, PROJECT_NAME, WPP, SFS, PKI, MFA) using external knowledge. If the full name is not written in the context, leave it as the acronym.
 6. For comparative, conceptual, or definition questions, synthesize a summarized answer using ONLY the facts in the provided context.
 7. CRITICAL — Never substitute a different procedure: if the user asks for a specific format/checklist (e.g., "FAT format"), do NOT answer with a different procedure (e.g., SAT steps). If the exact content is not in the context, say you cannot find it.
-8. CRITICAL — If the context contains ONLY section headings or titles (short lines of < 3 words with no actual steps, tables, or descriptions below them), do NOT attempt to invent content. Instead return exactly: "The document contains a section titled '[section name]' but the detailed content was not available in the indexed pages. Please consult the original document directly."
-9. CRITICAL — If the context does not contain the requested procedure/format/checklist, or lacks relevant information, return exactly: "I cannot find the instructions in the provided documents."
+8. If the provided context contains a table (indicated by TABLE: tags or tabular columns), ALWAYS format your output as a proper Markdown table.
+9. CRITICAL — If the context does not contain the requested procedure/format/checklist, or lacks relevant information, return exactly: "I cannot find the requested information in the provided documents."
 """
 
 
@@ -227,14 +235,13 @@ def _build_prompt(
         instruction_block = """- Answer the question by summarizing, defining, or comparing the subjects using only the facts described in the Context.
 - Do not use any external knowledge. Never mention company names, brand names, or external facts not in the context.
 - Never expand acronyms (e.g., PROJECT_MODULE, PROJECT_NAME, WPP, MFA, SFS) unless the context explicitly defines their full form.
-- If any context block contains "[NOTE: Section heading found but no body content...]", do NOT invent content for that section — say you couldn't find the full content.
-- If the context does not contain any relevant information, say "I cannot find the instructions in the provided documents." """
+- If the context does not contain any relevant information, say "I cannot find the requested information in the provided documents." """
     else:
-        instruction_block = """- The context may contain steps split across multiple blocks or pages. Scan the ENTIRE context from top to bottom and collect ALL numbered steps in sequential order (1, 2, 3, 4, 5...). Do not stop after the first block — if a numbered sequence continues in a later block, include those steps too. Never truncate a numbered sequence mid-way.
-- Stay strictly grounded in the provided Context. Do not invent steps, configurations, buttons, or directories.
-- CRITICAL: If the user asked for a specific format or checklist (e.g., FAT format, SAT checklist), only provide that exact format from context. Never substitute a different procedure.
-- CRITICAL: If any context block contains "[NOTE: Section heading found but no body content...]", do NOT invent content — say "The document contains this section but the detailed content was not indexed. Please check the original document."
-- If the context does not contain the exact instructions, format, or procedure, say "I cannot find the instructions in the provided documents." """
+        instruction_block = """- If the user asks for steps or a procedure, the context may contain steps split across multiple blocks or pages. Scan the ENTIRE context from top to bottom and collect ALL numbered steps in sequential order (1, 2, 3, 4, 5...).
+- If the context contains duplicate or highly similar steps across different sections, MERGE them into a single, clean procedure. STRICTLY deduplicate overlapping instructions so that a step is not repeated twice. Do NOT say "From the first section..." or use conversational filler like "Here is the merged procedure". Start the list immediately.
+- Stay strictly grounded in the provided Context. If the context uses a specific example (e.g., "RadiusTestUser", "192.168.x.x"), generalize it to "the appropriate user" or "the IP address" unless the user explicitly asks for the example. Do not mix troubleshooting steps for unrelated components (like STC-1) unless they directly answer the user's question.
+- CRITICAL: If the user asked for a specific format, table, or checklist (e.g., FAT format, SAT checklist), only provide that exact format from context. Do not append unrelated numbered steps.
+- If the context does not contain the exact instructions, format, or procedure, say "I cannot find the requested information in the provided documents." """
 
     return f"""
 Context:
@@ -281,7 +288,10 @@ def generate_answer(
     if history:
         for msg in history[-5:]:
             role = "User" if msg.get("role") == "user" else "Assistant"
-            history_str += f"{role}: {msg.get('content')}\n"
+            content = msg.get('content', '')
+            if role == "Assistant" and len(content) > 500:
+                content = content[:500] + "... [truncated]"
+            history_str += f"{role}: {content}\n"
 
     prompt = _build_prompt(
         question,

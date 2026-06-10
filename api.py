@@ -31,6 +31,12 @@ class ChatRequest(BaseModel):
     file_filter: str | None = None
 
 
+class SettingsRequest(BaseModel):
+    model: str | None = None
+    num_predict: int | None = None
+    num_ctx: int | None = None
+
+
 class SourceOut(BaseModel):
     ref: int
     source_file: str
@@ -131,6 +137,68 @@ def list_products():
     return {"products": sorted(merged)}
 
 
+@app.get("/models")
+def list_models():
+    """Return available models from the Groq API."""
+    import httpx
+    import src.config as cfg
+    try:
+        r = httpx.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {cfg.GROQ_API_KEY}"},
+            timeout=5.0
+        )
+        if r.status_code == 200:
+            models = [m["id"] for m in r.json().get("data", [])]
+            # Optional: sort alphabetically
+            models.sort()
+            return {"models": models, "active": cfg.OLLAMA_MODEL}
+    except Exception:
+        pass
+    return {"models": [cfg.OLLAMA_MODEL], "active": cfg.OLLAMA_MODEL}
+
+
+@app.post("/settings")
+def update_settings(body: SettingsRequest):
+    """Update active model and generation settings at runtime without restart."""
+    import src.config as cfg
+    import src.llm as llm_mod
+    import src.llm_stream as stream_mod
+
+    if body.model:
+        cfg.OLLAMA_MODEL = body.model
+    if body.num_predict:
+        cfg.OLLAMA_NUM_PREDICT = body.num_predict
+    if body.num_ctx:
+        pass  # stored per-request
+
+    return {
+        "model": cfg.OLLAMA_MODEL,
+        "num_predict": cfg.OLLAMA_NUM_PREDICT,
+    }
+
+
+@app.get("/sections")
+def list_sections():
+    """Return all available sections and their source files."""
+    from src.vector_store import get_vector_store
+    store = get_vector_store()
+    if hasattr(store, "get_all_sections"):
+        return {"sections": store.get_all_sections()}
+    return {"sections": []}
+
+
+@app.get("/section-content")
+def get_section_content(section: str, source_file: str):
+    """Return exact content for a specific section without LLM."""
+    from src.vector_store import get_vector_store
+    store = get_vector_store()
+    if hasattr(store, "get_section_content"):
+        content = store.get_section_content(section, source_file)
+        return {"content": content}
+    return {"content": ""}
+
+
 @app.post("/chat", response_model=ChatResponseOut)
 def chat(body: ChatRequest):
     hist = [{"role": m.role, "content": m.content} for m in body.history]
@@ -226,7 +294,10 @@ def chat_stream(body: ChatRequest):
         if hist:
             for msg in hist[-5:]:
                 role = "User" if msg.get("role") == "user" else "Assistant"
-                history_str += f"{role}: {msg.get('content')}\n"
+                content = msg.get('content', '')
+                if role == "Assistant" and len(content) > 500:
+                    content = content[:500] + "... [truncated]"
+                history_str += f"{role}: {content}\n"
 
         prompt = _build_prompt(
             question,

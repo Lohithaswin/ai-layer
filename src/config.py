@@ -13,9 +13,11 @@ BM25_PATH = Path(os.getenv("BM25_PATH", ROOT / "data" / "bm25_index.pkl"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 EXTRACT_TABLES = os.getenv("EXTRACT_TABLES", "true").lower() in ("1", "true", "yes")
 
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama-3.1-8b-instant")
 OLLAMA_TIMEOUT = max(float(os.getenv("OLLAMA_TIMEOUT", "900")), 900.0)
 OLLAMA_NUM_PREDICT = max(int(os.getenv("OLLAMA_NUM_PREDICT", "1800")), 1800)
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 EMBEDDING_MODEL = os.getenv(
     "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"

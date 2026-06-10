@@ -518,3 +518,217 @@ class PostgreSQLStore:
                 return [row[0] for row in cur.fetchall() if row[0]]
         finally:
             conn.close()
+
+    def get_all_sections(self) -> list[dict[str, Any]]:
+        """Return one entry per unique section title (deduplicated across all docs)."""
+        import re as _re
+
+        sql = """
+            SELECT DISTINCT c.section_title, d.source_file
+            FROM document_chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE c.section_title IS NOT NULL
+              AND c.section_title != ''
+              AND c.section_title NOT SIMILAR TO '%%\.\.\.%%'
+              AND length(c.section_title) <= 150
+              AND length(c.section_title) >= 5
+            ORDER BY c.section_title ASC, d.source_file ASC;
+        """
+        conn = self._get_connection()
+        raw = []
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                raw = cur.fetchall()
+        finally:
+            conn.close()
+
+        # Truncation signal: ends with 1-2 lowercase chars or a dangling article/prep
+        _TRUNC = _re.compile(
+            r"\s+[a-z]{1,2}$"
+            r"|\s+(?:an?|the|of|in|on|at|to|by|or|and|for|with|that|this|from|its|a)$",
+            _re.I,
+        )
+
+        # Deduplicate strictly by section_title only — one entry per unique title.
+        # When multiple files have the same title, pick the first (shortest path = most direct).
+        seen_title: set = set()
+        sections = []
+
+        for section_title, source_file in raw:
+            if _TRUNC.search(section_title):
+                continue
+            body = _re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", section_title).strip()
+            if len(body) < 4:
+                continue
+
+            title_key = section_title.lower().strip()
+            if title_key in seen_title:
+                continue
+            seen_title.add(title_key)
+            sections.append({
+                "section_title": section_title,
+                "source_file": source_file,
+            })
+
+        return sections
+
+    def get_section_content(self, section_title: str, source_file: str) -> str:
+        """
+        Fetch the exact chunks assigned to the section and stitch them together.
+        Uses a resilient overlap detection to prevent mid-word truncations.
+        """
+        import re
+
+        sql = ""
+        params = ()
+
+        own_m = re.match(r"^(\d+(?:\.\d+)*)", section_title.strip())
+        own_prefix = own_m.group(1) if own_m else None
+
+        if own_prefix:
+            prefix_pattern = own_prefix + ".%"
+            sql = """
+                SELECT c.text, c.chunk_index, c.page
+                FROM document_chunks c
+                JOIN documents d ON c.document_id = d.id
+                WHERE (c.section_title = %s OR c.section_title LIKE %s)
+                  AND d.source_file = %s
+                ORDER BY c.page ASC, c.chunk_index ASC;
+            """
+            params = (section_title, prefix_pattern, source_file)
+        else:
+            sql = """
+                SELECT c.text, c.chunk_index, c.page
+                FROM document_chunks c
+                JOIN documents d ON c.document_id = d.id
+                WHERE c.section_title = %s AND d.source_file = %s
+                ORDER BY c.page ASC, c.chunk_index ASC;
+            """
+            params = (section_title, source_file)
+
+        conn = self._get_connection()
+        chunks = []
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                for row in cur.fetchall():
+                    if row[0]:
+                        chunks.append({
+                            "text": row[0],
+                            "chunk_index": row[1],
+                            "page": row[2]
+                        })
+        finally:
+            conn.close()
+
+        if not chunks:
+            return ""
+
+        # ── 1. Resilient Chunk Stitching ──────────────────────────────────────
+        # Chunks overlap by ~40 chars. However, due to whitespace normalization 
+        # or PDF extraction, the overlap might not be byte-for-byte identical.
+        # We normalize whitespace in the overlap window to find the exact match point.
+        stitched = chunks[0]["text"]
+        OVERLAP_MAX = 80  # look up to 80 chars back
+
+        def normalize(s: str) -> str:
+            return re.sub(r"\s+", "", s).lower()
+
+        for i in range(1, len(chunks)):
+            curr = chunks[i]["text"]
+            prev_tail = stitched[-OVERLAP_MAX:]
+            curr_head = curr[:OVERLAP_MAX]
+
+            # Try exact match first
+            merged = False
+            for length in range(min(len(prev_tail), len(curr_head)), 5, -1):
+                if prev_tail.endswith(curr_head[:length]):
+                    stitched += curr[length:]
+                    merged = True
+                    break
+
+            if not merged:
+                # Try fuzzy match (ignoring whitespace)
+                norm_curr = normalize(curr_head)
+                best_len = 0
+                best_curr_chars_to_skip = 0
+                
+                # We check how much of the normalized prefix of curr matches 
+                # a normalized suffix of prev_tail.
+                for length in range(min(len(prev_tail), len(curr_head)), 5, -1):
+                    prefix_norm = normalize(curr_head[:length])
+                    if normalize(prev_tail).endswith(prefix_norm):
+                        best_curr_chars_to_skip = length
+                        merged = True
+                        break
+                
+                if merged:
+                    stitched += curr[best_curr_chars_to_skip:]
+                else:
+                    # Absolute fallback: just append. 
+                    # Add a space to prevent joining two words directly.
+                    if not stitched.endswith((" ", "\n", "-")) and not curr.startswith((" ", "\n")):
+                        stitched += " "
+                    stitched += curr
+
+        # ── 2. Trim to EXACT section start ────────────────────────────────────
+        # The very first chunk might contain text from the previous section
+        # before the actual heading appears. Find the heading and cut before it.
+        pattern_str = r"\s+".join(re.escape(w) for w in section_title.split())
+        head_match = re.search(pattern_str, stitched, re.IGNORECASE)
+        if head_match:
+            stitched = stitched[head_match.start():].lstrip()
+        else:
+            # Fuzzy fallback for start trim
+            first_words = " ".join(section_title.split()[:4])
+            pattern_str = r"\s+".join(re.escape(w) for w in first_words.split())
+            fw = re.search(pattern_str, stitched, re.IGNORECASE)
+            if fw:
+                ls = stitched.rfind("\n", 0, fw.start())
+                stitched = stitched[ls + 1 if ls >= 0 else 0:]
+
+        # Note: We NO LONGER trim at the next heading because we are strictly
+        # querying the database for chunks assigned to this section.
+        # The DB boundaries guarantee we stop before the next section.
+        # This prevents catastrophic cuts on page headers where headings repeat.
+
+        # ── 3. Strip noise lines ──────────────────────────────────────────────
+        clean = []
+        for line in stitched.splitlines():
+            s = line.strip()
+            if re.search(r"\.{3,}", s):                              # dot leaders
+                continue
+            if re.match(r"^(Page\s*)?\d{1,4}\s*$", s, re.I):       # bare page numbers
+                continue
+            if re.match(r"^\d{1,4}\s+PROJECT_MODULE\s+(Installation\s+)?(Guide|Manual)", s, re.I): # e.g. 47 PROJECT_MODULE Installation Guide
+                continue
+            if re.match(r"^PROJECT_MODULE\s+.*(Guide|Manual).*V\s*\d+", s, re.I): # e.g. PROJECT_MODULE - Web UI User Manual _V 11.0
+                continue
+            if re.search(r"©|All rights reserved|Restricted|Document ID", s, re.I):
+                continue
+            if re.match(r"^.{5,80}\s{4,}\d{1,4}\s*$", s):          # right-aligned page ref
+                continue
+            clean.append(line)
+
+        cleaned = "\n".join(clean)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+        # ── 4. Format as clean markdown ───────────────────────────────────────
+        # Only format the EXACT section title as a header. 
+        # Do not use regex to guess headers, as it falsely bolds list items (e.g. "4. Go to Users")
+        fmt = []
+        for line in cleaned.splitlines():
+            s = line.strip()
+            if not s:
+                fmt.append("")
+                continue
+                
+            if s.lower() == section_title.lower().strip():
+                fmt.append(f"\n### {s}\n")
+            else:
+                fmt.append(s)
+
+        result = "\n".join(fmt)
+        return re.sub(r"\n{3,}", "\n\n", result).strip()
+
