@@ -41,6 +41,7 @@ def ollama_available() -> bool:
             "https://api.groq.com/openai/v1/models",
             headers={"Authorization": f"Bearer {_cfg.GROQ_API_KEY}"},
             timeout=5.0,
+            verify=False,
         )
         return r.status_code == 200
     except Exception:
