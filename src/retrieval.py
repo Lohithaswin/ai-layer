@@ -606,6 +606,11 @@ def _dedupe_by_parent(
             h.get("parent_id")
             or _chunk_key(h)
         )
+        
+        # Do not aggressively dedupe Excel chunks, because an entire Excel sheet
+        # might share a single parent_id but contain thousands of distinct rows across chunks.
+        if h.get("source_file", "").endswith(".xlsx"):
+            pid = f"{pid}_{h.get('chunk_index', '')}_{hash(h.get('text', ''))}"
 
         if pid not in by_parent:
             by_parent[pid] = h
@@ -701,18 +706,11 @@ def retrieve(
                 ]
             }
 
-    candidate_k = RETRIEVAL_CANDIDATES
-
-    if plan.intent in (
-        "definition",
-        "field_detail",
-        "architecture",
-        "version_history",
-    ):
-        candidate_k = max(
-            RETRIEVAL_CANDIDATES,
-            22,
-        )
+    # Pull a massive pool of candidates so keyword boosting has enough tabular chunks to rerank
+    candidate_k = max(
+        150,
+        final_k * 4
+    )
 
     if (
         plan.focus_context
@@ -749,12 +747,18 @@ def retrieve(
 
     bm25 = get_bm25_store()
 
+    stopwords = {"explain", "the", "role", "att", "attribute", "what", "is", "can", "it", "do", "how", "to", "give", "me", "show", "tell", "which", "roles", "have", "are", "assigned", "a", "an", "for", "in", "of", "on", "with", "about", "and"}
+    
     for idx, q in enumerate(plan.search_queries):
         dense_hits = batch_dense_hits[idx]
 
         if USE_HYBRID_SEARCH:
+            # Extract keywords to prevent BM25 from failing on strict AND matches with conversational filler
+            kw_parts = [w for w in q.split() if w.lower() not in stopwords]
+            sparse_q = " OR ".join(kw_parts) if kw_parts else q
+            
             sparse_hits = bm25.search(
-                q,
+                sparse_q,
                 top_k=per_query,
                 filters=bm25_f,
             )
@@ -774,6 +778,48 @@ def retrieve(
             # Apply penalty to expanded queries so primary query takes precedence
             query_penalty = 1.0 if idx == 0 else 0.90
             effective_score = hit.get("score", 0.0) * query_penalty
+            
+            # Exact keyword match boost (critical for tabular data where semantic search fails)
+            chunk_text = hit.get("text", "").lower()
+            q_lower = question.lower().replace("?", "").replace("'", "")
+            stop_words = {"what", "wat", "is", "are", "the", "a", "an", "explain", "describe", "define", "role", "attr", "attribute", "under", "for", "list", "all"}
+            keywords = [w for w in q_lower.split() if w not in stop_words and len(w) > 1]
+            
+            match_count = sum(1 for kw in keywords if kw in chunk_text)
+            if match_count > 0:
+                effective_score *= (1.4 ** match_count) # Exponential boost for matching multiple keywords (e.g., "av" AND "tech")
+            
+            # Dynamic routing between Excel sheets based on user intent
+            if hit.get("product") == "role" and hit.get("source_file", "").endswith(".xlsx"):
+                q_lower = question.lower()
+                
+                # Assume list query by default for role questions
+                is_explain_query = False
+                
+                # If they explicitly ask for an explanation, description, or definition
+                if any(word in q_lower for word in ["explain", "description", "define"]):
+                    is_explain_query = True
+                    
+                # If they ask "what is", but they are asking about an "attr" or "attribute"
+                if "what is" in q_lower and ("attr" in q_lower or "attribute" in q_lower):
+                    is_explain_query = True
+                    
+                # BUT, if they are explicitly asking about a "role" (e.g., "what is av tech role", "explain basic role")
+                # and NOT specifically an attribute, they want the full list of attributes for that role!
+                # Because roles themselves DO NOT have descriptions in the documents, only attributes do.
+                if "role" in q_lower and not any(word in q_lower for word in ["attr", "attribute"]):
+                    is_explain_query = False
+                
+                if "Role Attributes Doc.xlsx" in hit.get("source_file", ""):
+                    if is_explain_query:
+                        effective_score += 8.0  # Bring tabular rows in as a backup to provide the full, un-truncated list of roles!
+                    else:
+                        effective_score += 10.0  # Tabular matrix wins for list queries!
+                elif "RoleAttDescriptions.xlsx" in hit.get("source_file", ""):
+                    if is_explain_query:
+                        effective_score += 10.0  # Give description the absolute highest priority for explain queries
+                    else:
+                        effective_score += 2.0
             
             # Create a copy so we don't modify the original hit if it's shared
             hit_copy = dict(hit)

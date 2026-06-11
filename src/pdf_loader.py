@@ -137,6 +137,7 @@ def load_pdf_chunks(pdf_path: Path, metadata: dict | None = None) -> list[dict]:
       - parent_id, source_file, page, chunk_index
     """
     doc = fitz.open(str(pdf_path))
+    fitz.TOOLS.mupdf_display_errors(False) # Suppress noisy MuPDF structure tree errors
     from src.config import DOCS_DIR
     try:
         rel_path = str(pdf_path.relative_to(DOCS_DIR.parent))
@@ -194,26 +195,71 @@ def load_pdf_chunks(pdf_path: Path, metadata: dict | None = None) -> list[dict]:
     return chunks
 
 
-def load_all_pdfs(docs_dir: Path) -> list[dict]:
+def load_all_pdfs(docs_dir: Path, indexed_files: dict[str, float] = None) -> list[dict]:
+    if indexed_files is None:
+        indexed_files = {}
+
     pdfs = sorted(docs_dir.rglob("*.pdf"))
-    if not pdfs:
+    
+    # Also support xlsx and docx ingestion here since we use the same pipeline
+    xlsxs = sorted(docs_dir.rglob("*.xlsx"))
+    docxs = sorted(docs_dir.rglob("*.docx"))
+    all_files = pdfs + xlsxs + docxs
+    
+    if not all_files:
         raise FileNotFoundError(
-            f"No PDF files found in {docs_dir}. Add PDFs or run: "
+            f"No PDF/Excel/Word files found in {docs_dir}. Add files or run: "
             "python scripts/generate_sample_docs.py"
         )
 
     from src.doc_registry import attach_metadata, classify_pdf
+    from src.excel_loader import load_excel_chunks
+    from src.word_loader import load_word_chunks
 
     all_chunks: list[dict] = []
-    for pdf in pdfs:
-        meta = classify_pdf(pdf)
-        raw = load_pdf_chunks(
-            pdf,
-            metadata={
-                "product": meta.product,
-                "doc_type": meta.doc_type,
-                "is_demo": meta.is_demo,
-            },
-        )
-        all_chunks.extend(attach_metadata(raw, meta))
+    skipped = 0
+    for file_path in all_files:
+        # Calculate relative path exactly as load_pdf_chunks does
+        try:
+            rel_path = str(file_path.relative_to(docs_dir.parent))
+        except Exception:
+            try:
+                rel_path = str(file_path.relative_to(file_path.parents[1]))
+            except Exception:
+                rel_path = file_path.name
+        rel_path = rel_path.replace("\\", "/")
+        
+        mtime = file_path.stat().st_mtime
+        
+        # Incremental skip check
+        if rel_path in indexed_files and mtime <= indexed_files[rel_path]:
+            skipped += 1
+            continue
+
+        meta = classify_pdf(file_path)
+        
+        try:
+            ext = file_path.suffix.lower()
+            if ext == ".xlsx":
+                raw = load_excel_chunks(file_path)
+            elif ext == ".docx":
+                raw = load_word_chunks(file_path)
+            elif ext == ".pdf":
+                raw = load_pdf_chunks(file_path)
+            else:
+                continue
+                
+            # Add mtime to each chunk's metadata
+            for r in raw:
+                r["mtime"] = mtime
+                r["product"] = meta.product
+                r["doc_type"] = meta.doc_type
+                r["is_demo"] = meta.is_demo
+
+            all_chunks.extend(attach_metadata(raw, meta))
+        except Exception as e:
+            print(f"Error loading {file_path.name}: {e}")
+            
+    if skipped > 0:
+        print(f"Skipped {skipped} files that were already up-to-date.")
     return all_chunks

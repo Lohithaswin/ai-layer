@@ -13,16 +13,26 @@ from src.pdf_loader import load_pdf_chunks
 from src.vector_store import VectorStore, reset_vector_store
 
 
-def load_single_pdf(pdf_path: Path) -> tuple[Path, list[dict], str | None]:
-    """Load a single PDF, return (path, chunks, error_msg)."""
+def load_single_document(file_path: Path) -> tuple[Path, list[dict], str | None]:
+    """Load a single document, return (path, chunks, error_msg)."""
     from src.doc_registry import classify_pdf, attach_metadata
+    from src.pdf_loader import load_pdf_chunks
+    from src.excel_loader import load_excel_chunks
+    from src.word_loader import load_word_chunks
     try:
-        meta = classify_pdf(pdf_path)
-        chunks = load_pdf_chunks(pdf_path)
+        meta = classify_pdf(file_path)
+        ext = file_path.suffix.lower()
+        if ext == ".xlsx":
+            chunks = load_excel_chunks(file_path)
+        elif ext == ".docx":
+            chunks = load_word_chunks(file_path)
+        else:
+            chunks = load_pdf_chunks(file_path)
+            
         chunks = attach_metadata(chunks, meta)
-        return pdf_path, chunks, None
+        return file_path, chunks, None
     except Exception as e:
-        return pdf_path, [], str(e)
+        return file_path, [], str(e)
 
 
 def ingest_batch(
@@ -64,7 +74,7 @@ def ingest_batch(
     
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(load_single_pdf, pdf_path): pdf_path
+            executor.submit(load_single_document, pdf_path): pdf_path
             for pdf_path in pdf_paths
         }
         
@@ -180,10 +190,12 @@ def main_full_reindex(workers: int | None = None) -> None:
     """Full reindex of all PDFs (replaces old index)."""
     print(f"Loading all PDFs from: {DOCS_DIR.resolve()}")
     
-    pdfs = sorted(DOCS_DIR.rglob("*.pdf"))
+    pdfs = []
+    for ext in ["*.xlsx", "*.docx"]:
+        pdfs.extend(sorted(DOCS_DIR.rglob(ext)))
     
     if not pdfs:
-        print(f"No PDF files found in {DOCS_DIR}")
+        print(f"No document files found in {DOCS_DIR}")
         sys.exit(1)
     
     print(f"Found {len(pdfs)} PDFs")

@@ -120,33 +120,45 @@ class DocumentManager:
     
     def list_all_pdfs(self) -> list[Document]:
         """
-        List all PDFs from all configured sources.
+        List all documents from all configured sources.
         
         Returns:
             List of Document objects (deduplicated by name)
         """
         docs = {}
         
-        # List local PDFs
+        from src.config import ROLE_ATTR_DIR
+        dirs_to_scan = []
         if self.local_docs_dir and self.local_docs_dir.exists():
-            for pdf_path in self.local_docs_dir.rglob("*.pdf"):
-                try:
-                    rel_path = str(pdf_path.relative_to(self.local_docs_dir.parent))
-                except Exception:
+            dirs_to_scan.append(self.local_docs_dir)
+        if ROLE_ATTR_DIR and ROLE_ATTR_DIR.exists():
+            dirs_to_scan.append(ROLE_ATTR_DIR)
+            
+        # List local docs
+        for d in dirs_to_scan:
+            for ext in ["*.pdf", "*.xlsx", "*.docx"]:
+                for file_path in d.rglob(ext):
                     try:
-                        rel_path = str(pdf_path.relative_to(pdf_path.parents[1]))
+                        rel_path = str(file_path.relative_to(d.parent))
                     except Exception:
-                        rel_path = pdf_path.name
-                rel_path = rel_path.replace("\\", "/") # normalize backslashes on Windows
-                doc = Document(
-                    name=pdf_path.name,
-                    source_file=rel_path,
-                    source_type="Local",
-                    path=str(pdf_path),
-                    last_modified=datetime.fromtimestamp(pdf_path.stat().st_mtime),
-                    size_bytes=pdf_path.stat().st_size,
-                )
-                docs[f"Local:{rel_path}"] = doc
+                        try:
+                            rel_path = str(file_path.relative_to(file_path.parents[1]))
+                        except Exception:
+                            rel_path = file_path.name
+                    rel_path = rel_path.replace("\\", "/") # normalize backslashes on Windows
+                    
+                    # Deduplicate or use distinct keys
+                    key = f"Local:{rel_path}"
+                    if key not in docs:
+                        doc = Document(
+                            name=file_path.name,
+                            source_file=rel_path,
+                            source_type="Local",
+                            path=str(file_path),
+                            last_modified=datetime.fromtimestamp(file_path.stat().st_mtime),
+                            size_bytes=file_path.stat().st_size,
+                        )
+                        docs[key] = doc
         
         # List SharePoint PDFs
         if self.sharepoint:

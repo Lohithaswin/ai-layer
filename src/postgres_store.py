@@ -58,9 +58,31 @@ class PostgreSQLStore:
                         product VARCHAR(64) NOT NULL,
                         doc_type VARCHAR(64) NOT NULL,
                         is_demo BOOLEAN DEFAULT FALSE,
-                        manual_version VARCHAR(64)
+                        manual_version VARCHAR(64),
+                        mtime FLOAT
                     );
                 """)
+                
+                # Automatically alter table to add mtime if it was created previously without it
+                cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS mtime FLOAT;")
+                
+                # Create role_mappings table for relational queries
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS role_mappings (
+                        id SERIAL PRIMARY KEY,
+                        role_name VARCHAR(256) NOT NULL,
+                        attribute_name VARCHAR(256) NOT NULL,
+                        group_name VARCHAR(256),
+                        class_name VARCHAR(256),
+                        class_id VARCHAR(64),
+                        description TEXT
+                    );
+                """)
+                cur.execute("ALTER TABLE role_mappings ADD COLUMN IF NOT EXISTS class_name VARCHAR(256);")
+                cur.execute("ALTER TABLE role_mappings ADD COLUMN IF NOT EXISTS class_id VARCHAR(64);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_role_mappings_role ON role_mappings (role_name);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_role_mappings_attr ON role_mappings (attribute_name);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_role_mappings_class ON role_mappings (class_name);")
                 
                 # 3. Create document_chunks table
                 # Dimension of sentence-transformers/all-MiniLM-L6-v2 is 384
@@ -111,7 +133,8 @@ class PostgreSQLStore:
                     "product": c.get("product", "unknown"),
                     "doc_type": c.get("doc_type", "unknown"),
                     "is_demo": bool(c.get("is_demo", False)),
-                    "manual_version": c.get("manual_version")
+                    "manual_version": c.get("manual_version"),
+                    "mtime": c.get("mtime", 0.0)
                 }
 
         conn = self._get_connection()
@@ -135,10 +158,10 @@ class PostgreSQLStore:
             with conn.cursor() as cur:
                 for sf, d in unique_docs.items():
                     cur.execute("""
-                        INSERT INTO documents (source_file, product, doc_type, is_demo, manual_version)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO documents (source_file, product, doc_type, is_demo, manual_version, mtime)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         RETURNING id;
-                    """, (sf, d["product"], d["doc_type"], d["is_demo"], d["manual_version"]))
+                    """, (sf, d["product"], d["doc_type"], d["is_demo"], d["manual_version"], d["mtime"]))
                     doc_ids[sf] = cur.fetchone()[0]
             conn.commit()
         finally:
@@ -201,6 +224,80 @@ class PostgreSQLStore:
 
         print("PostgreSQL indexing complete.")
         return len(chunks)
+
+    def get_indexed_files(self) -> dict[str, float]:
+        """Return a mapping of source_file -> mtime for incremental ingestion."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Use a default 0.0 for mtime if it's somehow NULL
+                cur.execute("SELECT source_file, COALESCE(mtime, 0.0) FROM documents;")
+                return {row[0]: row[1] for row in cur.fetchall()}
+        except Exception:
+            return {}
+        finally:
+            conn.close()
+
+    def query_role_database(self, keywords: list[str]) -> str:
+        """Query the strict relational role_mappings table and return formatted SQL text."""
+        if not keywords:
+            return ""
+            
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                import re
+                clean_kws = []
+                for kw in keywords:
+                    c = re.sub(r'[^a-zA-Z0-9]', '', kw)
+                    if c:
+                        clean_kws.append(c)
+                
+                if not clean_kws:
+                    return ""
+                    
+                search_str = " OR ".join(clean_kws)
+                
+                query = """
+                    WITH scored AS (
+                        SELECT role_name, attribute_name, class_name, group_name, description,
+                               ts_rank_cd(
+                                   to_tsvector('english', 
+                                       coalesce(role_name, '') || ' ' || 
+                                       coalesce(attribute_name, '') || ' ' || 
+                                       coalesce(class_name, '') || ' ' || 
+                                       coalesce(group_name, '') || ' ' || 
+                                       coalesce(description, '')
+                                   ),
+                                   websearch_to_tsquery('english', %s)
+                               ) as rank
+                        FROM role_mappings
+                    )
+                    SELECT role_name, attribute_name, class_name, group_name, description 
+                    FROM scored 
+                    WHERE rank > 0 
+                    ORDER BY rank DESC 
+                    LIMIT 40;
+                """
+                
+                cur.execute(query, (search_str,))
+                rows = cur.fetchall()
+                
+                if not rows:
+                    return ""
+                    
+                # Format into text
+                output = ["=== EXACT DATABASE MATCHES FOR ROLES & ATTRIBUTES ==="]
+                for row in rows:
+                    role, attr, cls, group, desc = row
+                    output.append(f"Role: '{role}' | Attribute: '{attr}' | Class: '{cls}' | Group: '{group}' | Description: '{desc}'")
+                
+                return "\n".join(output)
+        except Exception as e:
+            print(f"Error querying role_mappings: {e}")
+            return ""
+        finally:
+            conn.close()
 
     def _parse_where_clause(self, where: dict | None) -> tuple[str, list[Any]]:
         if not where:

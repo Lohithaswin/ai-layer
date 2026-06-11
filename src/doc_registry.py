@@ -69,10 +69,13 @@ def classify_pdf(path: Path) -> DocMetadata:
 
     # 1. Scan for known products first (scalable keyword scan)
     product = "unknown"
-    for known in ("sfs", "project_name", "project_module", "pki", "ldap", "iam", "mfa", "se1210"):
-        if known in lower:
-            product = known
-            break
+    if "role attributes" in lower or path.suffix.lower() in (".xlsx", ".docx"):
+        product = "role"
+    else:
+        for known in ("sfs", "project_name", "project_module", "pki", "ldap", "iam", "mfa", "se1210"):
+            if known in lower:
+                product = known
+                break
 
     # 2. Fall back to dynamic product extraction from the filename prefix
     # e.g., "PROJECT_MODULE_User Manual.pdf" -> product is "project_module"

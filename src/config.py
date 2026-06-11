@@ -7,6 +7,7 @@ load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = Path("C:/path/to/your/Release-Documents")
+ROLE_ATTR_DIR = Path("C:/Users/REDACTED_USER/OneDrive - YourCompany/YourDepartment - Documents/PROJECT_NAME Project/Role Attributes document")
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR", ROOT / "data" / "chroma"))
 BM25_PATH = Path(os.getenv("BM25_PATH", ROOT / "data" / "bm25_index.pkl"))
 

@@ -40,7 +40,10 @@ def is_follow_up(question: str) -> bool:
     if _FOLLOWUP_RE.search(q):
         return True
     if len(q.split()) <= 6 and not _SHORT_ACRONYM_RE.match(q):
-        return True
+        # Don't treat standalone definition/explain questions as follow-ups just because they are short
+        q_lower = q.lower()
+        if not any(q_lower.startswith(prefix) for prefix in ("explain ", "what is ", "what are ", "define ")):
+            return True
     return False
 
 
@@ -62,10 +65,21 @@ def resolve_question(
         ac = question.strip().rstrip("?").upper()
         return f"What is {ac}? definition and overview", subjects or [ac]
 
+    # Extract previous user message to inject context for follow-ups (like role/attribute names that aren't acronyms)
+    prev_user_msg = ""
+    if history:
+        for msg in reversed(history):
+            if msg.get("role") == "user":
+                prev_user_msg = msg.get("content", "").strip()
+                break
+
     if not is_follow_up(question) and subjects:
         return question, subjects
 
     if not subjects:
+        # If it's a follow up but no acronyms were found, at least inject the previous user message!
+        if is_follow_up(question) and prev_user_msg:
+            return f"{prev_user_msg} - {question}", subjects
         return question, subjects
 
     primary = resolve_primary_product(question, subjects, history)
@@ -73,22 +87,28 @@ def resolve_question(
         primary = _pick_primary_subject(subjects)
 
     if not primary:
+        if is_follow_up(question) and prev_user_msg:
+             return f"{prev_user_msg} - {question}", subjects
         return question, subjects
 
     primary_upper = primary.upper()
+    
+    # Inject previous user message into the resolved question
+    context_prefix = f"{prev_user_msg} - " if prev_user_msg else ""
+    
     if "architecture" in q_lower or "components" in q_lower:
         return (
-            f"{primary_upper} architecture components client-server Security Management User Management Security Logging Security Integrity SFGU {question}",
+            f"{primary_upper} architecture components client-server Security Management User Management Security Logging Security Integrity SFGU {context_prefix}{question}",
             subjects,
         )
 
     if "security management" in q_lower or "implementation" in q_lower:
         return (
-            f"{primary_upper} security management implementation configuration {question}",
+            f"{primary_upper} security management implementation configuration {context_prefix}{question}",
             subjects,
         )
 
-    return f"{primary_upper}: {question}", subjects
+    return f"{primary_upper}: {context_prefix}{question}", subjects
 
 
 _AFFIRMATION_RE = re.compile(r"^\s*(yes|y|sure|ok|okay|please|yep|do\s+it|go\s+ahead)\b\s*[.?]*$", re.I)

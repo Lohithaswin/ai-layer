@@ -18,6 +18,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_watcher_observer = None
+
+@app.on_event("startup")
+def startup_event():
+    import threading
+    from src.watcher import start_watcher
+    global _watcher_observer
+    try:
+        _watcher_observer = start_watcher()
+        print("[API] Background file watcher started successfully.")
+    except Exception as e:
+        print(f"[API] Failed to start background file watcher: {e}")
+
+@app.on_event("shutdown")
+def shutdown_event():
+    global _watcher_observer
+    if _watcher_observer:
+        _watcher_observer.stop()
+        _watcher_observer.join()
+        print("[API] Background file watcher stopped.")
+
 
 class HistoryMessage(BaseModel):
     role: str
@@ -281,6 +302,7 @@ def chat_stream(body: ChatRequest):
             plan=plan,
             product_filter=body.product_filter,
             file_filter=body.file_filter,
+            final_k=15, # Increased from default 7 to 15 to guarantee enough chunks for all 30+ role attributes
         )
 
         if not hits:
@@ -289,6 +311,31 @@ def chat_stream(body: ChatRequest):
             return
 
         context, sources = _format_context(hits)
+        
+        # SQL Database Relational Interception
+        q_lower = question.lower()
+        if "role" in q_lower or "attr" in q_lower or "attribute" in q_lower:
+            stop_words = {"what", "wat", "is", "are", "the", "a", "an", "explain", "describe", "define", "role", "attr", "attribute", "under", "for", "list", "all", "and", "give", "its", "name", "-"}
+            keywords = [w for w in q_lower.replace("?", "").replace("'", "").split() if w not in stop_words and len(w) > 1]
+            if keywords and hasattr(store, "query_role_database"):
+                sql_context = store.query_role_database(keywords)
+                if sql_context:
+                    # Prepend SQL relational results directly above the semantic search chunks!
+                    context = f"{sql_context}\n\n=== SEMANTIC SEARCH RESULTS ===\n{context}"
+        
+        # Aggressively compress Excel boilerplate to fit more rows into Groq's strict payload limit
+        context = context.replace("Item details: ", "")
+        context = context.replace("Role Attribute Name is ", "Attr:")
+        context = context.replace("RoleName is ", "Role:")
+        context = context.replace("Description is ", "Desc:")
+        context = context.replace("Roles to which It is assigned is ", "Roles:")
+        
+        # Force a strictly lower hard limit (10000 chars) for Groq API to prevent 413 Payload Too Large.
+        # Even with dynamic max_tokens, Groq's free tier TPM limits frequently crash on 20k chars.
+        # 10,000 chars still holds ~160 compressed rows, which is more than enough for any single role.
+        safe_limit = 10000
+        if len(context) > safe_limit:
+            context = context[:safe_limit]
 
         history_str = ""
         if hist:

@@ -121,6 +121,11 @@ Follow these rules STRICTLY:
 7. CRITICAL — Never substitute a different procedure: if the user asks for a specific format/checklist (e.g., "FAT format"), do NOT answer with a different procedure (e.g., SAT steps). If the exact content is not in the context, say you cannot find it.
 8. If the provided context contains a table (indicated by TABLE: tags or tabular columns), ALWAYS format your output as a proper Markdown table.
 9. CRITICAL — If the context does not contain the requested procedure/format/checklist, or lacks relevant information, return exactly: "I cannot find the requested information in the provided documents."
+10. IMPORTANT: Be tolerant of typos, misspellings, and shorthand abbreviations in the user's question (e.g., "att" = "attribute", "commisiion" = "commission"). Map them to the correct terms in the context to provide the answer.
+11. CRITICAL: If the user asks for an explanation or description of something (e.g., a role attribute), and the context contains a brief, simple, or self-referential description (e.g., "Description is 'The User can commission turbine'"), DO NOT say you lack information. You MUST explicitly output that exact description to the user and state the roles it is assigned to. Never omit brief descriptions!
+12. NEVER truncate your answer, get lazy, or use conversational filler like "... (and other attributes)". If the context contains a long list of items (like a list of 50 roles or attributes), you MUST explicitly output EVERY SINGLE ONE of them exhaustively. Do not omit anything!
+13. If the user asks for the attributes under a specific role (e.g., "what are the role attrs under Av tech role"), you MUST group the output by the Role Name and explicitly list ALL corresponding Role Attribute Names exactly as they appear in the context. Do NOT omit any attributes just because they lack a description.
+14. When listing multiple attributes, roles, or descriptions, ALWAYS format them as a clean, easy-to-read Markdown bulleted list (e.g., `- **[Name]**: [Description]`). Do not repeat the same items in different sections, and do not dump raw unformatted text. Keep the output neat and professional.
 """
 
 
