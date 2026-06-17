@@ -1,0 +1,182 @@
+[
+  {
+    "id": 1,
+    "question": "what roles have conv param read attribute?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 2,
+    "question": "list all roles for Converter Configuration",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 3,
+    "question": "roles with AV tech role",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 4,
+    "question": "describe Converter",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 5,
+    "question": "explain PROJECT_NAME Roles",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 6,
+    "question": "definition of Converter Configuration",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 7,
+    "question": "What is PROJECT_MODULE?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 8,
+    "question": "full form of PROJECT_NAME",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 9,
+    "question": "define SFS",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 10,
+    "question": "what does LDAP stand for?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 11,
+    "question": "What are the fields in the Add User window?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 12,
+    "question": "User Details table columns",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 13,
+    "question": "details of the system configuration screen",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 14,
+    "question": "how to configure LDAP proxy?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 15,
+    "question": "steps to add a new user",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 16,
+    "question": "how to deploy PKI mini service?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 17,
+    "question": "process for installing PROJECT_MODULE",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 18,
+    "question": "how to restart the system",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 19,
+    "question": "PROJECT_NAME architecture components",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 20,
+    "question": "client-server structure of PROJECT_MODULE",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 21,
+    "question": "explain the security management implementation",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 22,
+    "question": "first version of PROJECT_MODULE",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 23,
+    "question": "release notes modifications",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 24,
+    "question": "when was PROJECT_NAME released?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 25,
+    "question": "tell me more about it",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 26,
+    "question": "yes",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 27,
+    "question": "give project_module fat format",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 28,
+    "question": "compare YOUR_PRODUCT",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 29,
+    "question": "what is the difference between SAT and FAT?",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  },
+  {
+    "id": 30,
+    "question": "explain MFA v3.0.0",
+    "error": "<urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "status": "FAILED"
+  }
+]

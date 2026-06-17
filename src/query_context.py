@@ -39,11 +39,6 @@ def is_follow_up(question: str) -> bool:
     q = question.strip()
     if _FOLLOWUP_RE.search(q):
         return True
-    if len(q.split()) <= 6 and not _SHORT_ACRONYM_RE.match(q):
-        # Don't treat standalone definition/explain questions as follow-ups just because they are short
-        q_lower = q.lower()
-        if not any(q_lower.startswith(prefix) for prefix in ("explain ", "what is ", "what are ", "define ")):
-            return True
     return False
 
 

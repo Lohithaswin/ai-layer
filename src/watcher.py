@@ -27,7 +27,12 @@ class DebouncedHandler(FileSystemEventHandler):
                 ingest_role_sql()
                 # Run the vector db role ingestion (as a subprocess to avoid module conflicts)
                 script_path = Path(__file__).resolve().parent.parent / "scripts" / "ingest_roles.py"
-                subprocess.run([sys.executable, str(script_path)], capture_output=True)
+                project_root = Path(__file__).resolve().parent.parent
+                subprocess.run(
+                    [sys.executable, str(script_path)],
+                    capture_output=True,
+                    cwd=str(project_root)
+                )
                 print("[Watcher] Role ingestion complete.")
         except Exception as e:
             print(f"[Watcher] Error during ingestion: {e}")

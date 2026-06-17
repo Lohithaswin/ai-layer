@@ -18,26 +18,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_watcher_observer = None
-
 @app.on_event("startup")
 def startup_event():
-    import threading
-    from src.watcher import start_watcher
-    global _watcher_observer
-    try:
-        _watcher_observer = start_watcher()
-        print("[API] Background file watcher started successfully.")
-    except Exception as e:
-        print(f"[API] Failed to start background file watcher: {e}")
+    print("[API] Starting up. Background ingestion disabled to prevent slow downs.")
 
 @app.on_event("shutdown")
 def shutdown_event():
-    global _watcher_observer
-    if _watcher_observer:
-        _watcher_observer.stop()
-        _watcher_observer.join()
-        print("[API] Background file watcher stopped.")
+    print("[API] Shutting down.")
 
 
 class HistoryMessage(BaseModel):
@@ -201,22 +188,28 @@ def update_settings(body: SettingsRequest):
 
 @app.get("/sections")
 def list_sections():
-    """Return all available sections and their source files."""
+    """Return all role attribute names from the role_mappings SQL table."""
     from src.vector_store import get_vector_store
     store = get_vector_store()
-    if hasattr(store, "get_all_sections"):
-        return {"sections": store.get_all_sections()}
+    try:
+        if hasattr(store, "get_role_attribute_names"):
+            attrs = store.get_role_attribute_names()
+            return {"sections": [{"section_title": attr, "source_file": "Role Attributes"} for attr in attrs]}
+    except Exception:
+        pass
     return {"sections": []}
 
 
 @app.get("/section-content")
 def get_section_content(section: str, source_file: str):
-    """Return exact content for a specific section without LLM."""
+    """Return role, class, class_id and group for the selected attribute (no LLM)."""
     from src.vector_store import get_vector_store
     store = get_vector_store()
-    if hasattr(store, "get_section_content"):
-        content = store.get_section_content(section, source_file)
-        return {"content": content}
+    try:
+        if hasattr(store, "get_attribute_details"):
+            return store.get_attribute_details(section)
+    except Exception as e:
+        return {"content": f"Error retrieving attribute: {str(e)}"}
     return {"content": ""}
 
 
@@ -313,15 +306,46 @@ def chat_stream(body: ChatRequest):
         context, sources = _format_context(hits)
         
         # SQL Database Relational Interception
+        # Sole trigger: the user selected 'Role Attributes' in the filter dropdown.
+        # No query keyword checks needed — the filter IS the differentiator.
         q_lower = question.lower()
-        if "role" in q_lower or "attr" in q_lower or "attribute" in q_lower:
-            stop_words = {"what", "wat", "is", "are", "the", "a", "an", "explain", "describe", "define", "role", "attr", "attribute", "under", "for", "list", "all", "and", "give", "its", "name", "-"}
-            keywords = [w for w in q_lower.replace("?", "").replace("'", "").split() if w not in stop_words and len(w) > 1]
-            if keywords and hasattr(store, "query_role_database"):
-                sql_context = store.query_role_database(keywords)
-                if sql_context:
-                    # Prepend SQL relational results directly above the semantic search chunks!
-                    context = f"{sql_context}\n\n=== SEMANTIC SEARCH RESULTS ===\n{context}"
+        is_role_filter_active = bool(
+            body.file_filter and "role" in body.file_filter.lower()
+        ) or bool(
+            body.product_filter and "role" in body.product_filter.lower()
+        )
+        if is_role_filter_active:
+            from src.intent_router import route_role_intent
+            
+            router_result = route_role_intent(q_lower)
+            intent = router_result["intent"]
+            entity = router_result["entity"]
+            
+            sql_blocks = []
+            if entity and hasattr(store, "query_role_database"):
+                if intent == "COUNT_ATTRIBUTES" and hasattr(store, "count_role_attributes"):
+                    res = store.count_role_attributes(entity)
+                    if res: sql_blocks.append(res)
+                elif intent == "GET_ROLES_FOR_ATTRIBUTE" and hasattr(store, "get_roles_for_attribute"):
+                    res = store.get_roles_for_attribute(entity)
+                    if res: sql_blocks.append(res)
+                elif intent == "GET_ATTRIBUTES_FOR_ROLE" and hasattr(store, "get_attributes_for_role"):
+                    res = store.get_attributes_for_role(entity)
+                    if res: sql_blocks.append(res)
+                elif intent == "DESCRIBE_ATTRIBUTE" and hasattr(store, "describe_attribute"):
+                    res = store.describe_attribute(entity)
+                    if res: sql_blocks.append(res)
+                
+                # If a specific intent was detected but the specialized SQL returned nothing, fallback to general SQL search
+                if not sql_blocks and intent != "GENERAL_SEARCH":
+                    res = store.query_role_database([entity])
+                    if res: sql_blocks.append(res)
+
+            if sql_blocks:
+                sql_context = "\n\n".join(sql_blocks)
+                # Discard semantic search results completely for exact role queries
+                hits.clear()
+                context = f"=== EXACT DATABASE MATCHES FOR ROLES & ATTRIBUTES ===\n{sql_context}"
         
         # Aggressively compress Excel boilerplate to fit more rows into Groq's strict payload limit
         context = context.replace("Item details: ", "")
@@ -330,12 +354,9 @@ def chat_stream(body: ChatRequest):
         context = context.replace("Description is ", "Desc:")
         context = context.replace("Roles to which It is assigned is ", "Roles:")
         
-        # Force a strictly lower hard limit (10000 chars) for Groq API to prevent 413 Payload Too Large.
-        # Even with dynamic max_tokens, Groq's free tier TPM limits frequently crash on 20k chars.
-        # 10,000 chars still holds ~160 compressed rows, which is more than enough for any single role.
-        safe_limit = 10000
-        if len(context) > safe_limit:
-            context = context[:safe_limit]
+        from src.config import MAX_CONTEXT_CHARS
+        if len(context) > MAX_CONTEXT_CHARS:
+            context = context[:MAX_CONTEXT_CHARS]
 
         history_str = ""
         if hist:

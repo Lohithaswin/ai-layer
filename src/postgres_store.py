@@ -299,6 +299,240 @@ class PostgreSQLStore:
         finally:
             conn.close()
 
+    def describe_attribute(self, attr_fragment: str) -> str:
+        """Return description, group, class and assigned roles for a given attribute (exact match only)."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Exact match first
+                cur.execute("""
+                    SELECT DISTINCT attribute_name, description, group_name
+                    FROM role_mappings
+                    WHERE attribute_name ILIKE %s
+                    ORDER BY attribute_name;
+                """, (attr_fragment,))
+                exact_rows = cur.fetchall()
+                
+                # Fallback to partial match if no exact match
+                if not exact_rows:
+                    cur.execute("""
+                        SELECT DISTINCT attribute_name, description, group_name
+                        FROM role_mappings
+                        WHERE attribute_name ILIKE %s
+                        ORDER BY attribute_name
+                        LIMIT 5;
+                    """, (f"%{attr_fragment}%",))
+                    exact_rows = cur.fetchall()
+                    
+                if not exact_rows:
+                    return ""
+                
+                lines = []
+                for matched_name, description, group_name in exact_rows:
+                    description = description or ""
+                    group_name = group_name or ""
+
+                # Get all classes
+                cur.execute("""
+                    SELECT DISTINCT class_name
+                    FROM role_mappings
+                    WHERE attribute_name ILIKE %s AND class_name IS NOT NULL AND class_name != ''
+                    ORDER BY class_name;
+                """, (matched_name,))
+                classes = [r[0] for r in cur.fetchall()]
+
+                # Get all assigned roles
+                cur.execute("""
+                    SELECT DISTINCT role_name
+                    FROM role_mappings
+                    WHERE attribute_name ILIKE %s
+                    ORDER BY role_name;
+                """, (matched_name,))
+                roles = [r[0] for r in cur.fetchall()]
+
+                lines = [f"**{matched_name}**"]
+                if description:
+                    lines.append(f"Description: {description}")
+                if group_name:
+                    lines.append(f"Group: {group_name}")
+                if classes:
+                    lines.append(f"Class(es): {', '.join(classes)}")
+                if roles:
+                    lines.append(f"\nAssigned to {len(roles)} role(s):\n" + "\n".join(f"  {r}" for r in roles))
+                return "\n".join(lines)
+        except Exception as e:
+            print(f"Error in describe_attribute: {e}")
+            return ""
+        finally:
+            conn.close()
+
+    def get_roles_for_attribute(self, attr_fragment: str) -> str:
+        """Return all UNIQUE roles that have a given attribute. Exact match first, partial fallback."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Try exact match first
+                cur.execute("""
+                    SELECT DISTINCT attribute_name
+                    FROM role_mappings
+                    WHERE attribute_name ILIKE %s
+                    ORDER BY attribute_name;
+                """, (attr_fragment,))
+                attr_names = [r[0] for r in cur.fetchall()]
+
+                # Fallback to partial match only if no exact match
+                if not attr_names:
+                    cur.execute("""
+                        SELECT DISTINCT attribute_name
+                        FROM role_mappings
+                        WHERE attribute_name ILIKE %s
+                        ORDER BY attribute_name;
+                    """, (f"%{attr_fragment}%",))
+                    attr_names = [r[0] for r in cur.fetchall()]
+
+                if not attr_names:
+                    return ""
+
+                # Build the WHERE clause for the matched attribute names
+                placeholders = ",".join(["%s"] * len(attr_names))
+                cur.execute(f"""
+                    SELECT DISTINCT role_name
+                    FROM role_mappings
+                    WHERE attribute_name IN ({placeholders})
+                    ORDER BY role_name;
+                """, attr_names)
+                unique_roles = [r[0] for r in cur.fetchall()]
+                if not unique_roles:
+                    return ""
+
+                lines = []
+                if len(attr_names) == 1:
+                    lines.append(f"Attribute: **{attr_names[0]}**")
+                else:
+                    lines.append(f"Matching attributes ({len(attr_names)}): " + ", ".join(f"**{a}**" for a in attr_names))
+
+                lines.append(f"\nRoles with access ({len(unique_roles)} unique roles):")
+                lines.extend(f"  {r}" for r in unique_roles)
+                return "\n".join(lines)
+        except Exception as e:
+            print(f"Error in get_roles_for_attribute: {e}")
+            return ""
+        finally:
+            conn.close()
+
+    def get_attributes_for_role(self, role_fragment: str) -> str:
+        """Return all attributes assigned to a given role (partial match on role name)."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Try exact match first
+                cur.execute("""
+                    SELECT DISTINCT role_name, attribute_name, description, group_name
+                    FROM role_mappings
+                    WHERE role_name ILIKE %s
+                    ORDER BY role_name, attribute_name;
+                """, (role_fragment,))
+                rows = cur.fetchall()
+                
+                # Fallback to partial match if no exact match
+                if not rows:
+                    cur.execute("""
+                        SELECT DISTINCT role_name, attribute_name, description, group_name
+                        FROM role_mappings
+                        WHERE role_name ILIKE %s
+                        ORDER BY role_name, attribute_name;
+                    """, (f"%{role_fragment}%",))
+                    rows = cur.fetchall()
+                    
+                if not rows:
+                    return ""
+                from collections import defaultdict
+                grouped = defaultdict(dict)
+                for role, attr, desc, grp in rows:
+                    if attr not in grouped[role]:
+                        grouped[role][attr] = (desc, grp)
+                lines = []
+                for role, attrs_dict in grouped.items():
+                    lines.append(f"**{role}** — {len(attrs_dict)} attribute(s):")
+                    for attr, (desc, grp) in attrs_dict.items():
+                        entry = f"  • {attr}"
+                        if grp:
+                            entry += f" [{grp}]"
+                        if desc:
+                            entry += f" — {desc}"
+                        lines.append(entry)
+                    lines.append("")
+                return "\n".join(lines)
+        except Exception as e:
+            print(f"Error in get_attributes_for_role: {e}")
+            return ""
+        finally:
+            conn.close()
+
+    def count_role_attributes(self, role_fragment: str) -> str:
+        """Count how many attributes a given role has."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT role_name, COUNT(DISTINCT attribute_name) as cnt
+                    FROM role_mappings
+                    WHERE role_name ILIKE %s
+                    GROUP BY role_name
+                    ORDER BY role_name;
+                """, (f"%{role_fragment}%",))
+                rows = cur.fetchall()
+                if not rows:
+                    return ""
+                lines = []
+                for role, cnt in rows:
+                    lines.append(f"**{role}**: {cnt} attribute(s)")
+                return "\n".join(lines)
+        except Exception as e:
+            print(f"Error in count_role_attributes: {e}")
+            return ""
+        finally:
+            conn.close()
+
+    def get_role_attribute_names(self) -> list[str]:
+        """Return all distinct attribute names from role_mappings for the section search bar."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT attribute_name FROM role_mappings ORDER BY attribute_name ASC;")
+                return [row[0] for row in cur.fetchall() if row[0]]
+        except Exception:
+            return []
+        finally:
+            conn.close()
+
+    def get_attribute_details(self, attribute_name: str) -> dict:
+        """Return role name, class, class_id and group for a selected attribute (for the section search bar)."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT role_name, class_name, class_id, group_name
+                    FROM role_mappings
+                    WHERE attribute_name = %s
+                    ORDER BY role_name;
+                """, (attribute_name,))
+                rows = cur.fetchall()
+                if not rows:
+                    return {"content": f"No details found for attribute '{attribute_name}'."}
+                output_parts = [f"**Attribute Details: {attribute_name}**\n"]
+                for rname, cls, cls_id, grp in rows:
+                    output_parts.append(f"- **Role Name:** {rname}")
+                    output_parts.append(f"  - **Class:** {cls or 'N/A'}")
+                    output_parts.append(f"  - **Class ID:** {cls_id or 'N/A'}")
+                    output_parts.append(f"  - **Role Attr Group:** {grp or 'N/A'}")
+                    output_parts.append("")
+                return {"content": "\n".join(output_parts)}
+        except Exception as e:
+            return {"content": f"Error retrieving attribute: {str(e)}"}
+        finally:
+            conn.close()
+
     def _parse_where_clause(self, where: dict | None) -> tuple[str, list[Any]]:
         if not where:
             return "", []

@@ -338,11 +338,13 @@ def _format_context(
         heading_only = _content_quality_score(clean_body) < _CONTENT_QUALITY_THRESHOLD
 
         # Build LLM context block
-        if heading_only and section_name and len(clean_body.split()) < 30:
+        relevance = hit.get("relevance", hit.get("score", 0))
+        if heading_only and section_name and len(clean_body.split()) < 30 and relevance < 0.6:
+            # Only block LLM on weak/accidental heading matches — not high-confidence matches
             blocks.append(
                 f"[SECTION: {section_name}]\n{clean_body}\n"
                 f"[NOTE: Section heading found but no body content was indexed for this section. "
-                f"Do NOT invent content for '{section_name}'.]"
+                f"Do NOT invent content for '{section_name}'.]\n"
             )
         else:
             if section_name:

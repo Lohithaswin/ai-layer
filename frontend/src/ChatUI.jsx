@@ -164,24 +164,24 @@ export function ChatUI() {
     // Add user "fetch" message
     setMessages(prev => [...prev, {
       role: 'user',
-      content: `Fetch section: **${sectionTitle}**\n\n*From: ${sourceFile}*`,
+      content: `Show attribute: **${sectionTitle}**`,
     }]);
 
     try {
       const response = await fetch(`${API_BASE}/section-content?section=${encodeURIComponent(sectionTitle)}&source_file=${encodeURIComponent(sourceFile)}`);
-      if (!response.ok) throw new Error('Failed to fetch section content');
+      if (!response.ok) throw new Error('Failed to fetch attribute details');
       const data = await response.json();
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `### ${sectionTitle}\n\n${data.content}`,
+        content: data.content,
         sources: [],
         note: 'direct_section_fetch',
-        sectionRef: { title: sectionTitle, file: sourceFile },
+        sectionRef: { title: sectionTitle, file: 'Role Attributes' },
       }]);
     } catch (error) {
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `Could not fetch content for section **"${sectionTitle}"**. Please try again.`,
+        content: `Could not fetch details for attribute **"${sectionTitle}"**. Please try again.`,
         error: true,
       }]);
     } finally {
@@ -429,7 +429,7 @@ export function ChatUI() {
                 ref={searchInputRef}
                 type="text"
                 className="section-search-input"
-                placeholder="Search sections & subsections — jump directly to any content…"
+                placeholder="Search role attributes — click to view role name, class, class ID & group…"
                 value={sectionSearchTerm}
                 onChange={e => { setSectionSearchTerm(e.target.value); setShowSectionDropdown(true); }}
                 onFocus={() => setShowSectionDropdown(true)}
@@ -458,7 +458,7 @@ export function ChatUI() {
                           <div className="dropdown-item-title">{s.section_title}</div>
                           <div className="dropdown-item-file">
                             <span className="file-icon"><FileText size={14} /></span>
-                            {s.source_file.split('/').pop()}
+                            Role Attributes
                           </div>
                         </button>
                       ))}

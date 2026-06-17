@@ -59,7 +59,7 @@ CONTEXT_FOCUS_PAGE_GAP = float(os.getenv("CONTEXT_FOCUS_PAGE_GAP", "0.35"))
 MAX_CONTEXT_CHARS = int(
     os.getenv(
         "MAX_CONTEXT_CHARS",
-        "10000"
+        "14000"
     )
 )
 MAX_SECTION_PAGES = int(os.getenv("MAX_SECTION_PAGES", "25"))
