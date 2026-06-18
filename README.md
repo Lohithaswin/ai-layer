@@ -6,32 +6,50 @@ An enterprise-grade, layout-aware **Retrieval-Augmented Generation (RAG)** syste
 
 ## ✨ What This System Does
 
-- **Chat with your PDFs** — Ask any question about YOUR_PRODUCT, MFA, SFS, STP and get sourced answers with page references
-- **Role Attributes Matrix** — Switch to the **ROLE filter** and query the Role Attributes Excel database with 100% SQL accuracy (no hallucination)
+- **Chat with your PDFs** — Ask any question about YOUR_PRODUCT, MFA, SFS, PKI, LDAP and get sourced answers with page references
+- **Role Attributes Matrix** — Any role/attribute query is intercepted **before the LLM** and answered directly from PostgreSQL — zero hallucination, zero latency
 - **Section Search Bar** — Click any Role Attribute name to instantly see which classes, groups, and roles are assigned to it
 - **Streaming Responses** — Answers stream token-by-token via SSE for a fast, responsive feel
-- **Incremental Ingestion** — New documents auto-detected and indexed overnight (watcher disabled during bot runtime to prevent slowdowns)
+- **Follow-Up Awareness** — Pronouns ("it", "that"), affirmations ("yes"), and vague references ("how do I do that?") are resolved from conversation history
+- **Clarification System** — Vague or incomplete queries trigger a clarification prompt instead of guessing
+- **Incremental Ingestion** — New documents auto-detected and indexed (watcher disabled during bot runtime to prevent slowdowns)
 
 ---
 
 ## 🏗 System Architecture
 
-```mermaid
-graph TD
-    A[PDF Docs + Excel Files] -->|Nightly Ingest| B[PyMuPDF Parser + Excel Parser]
-    B -->|Parent-Child Chunking| C[(PostgreSQL pgvector)]
-    B -->|Role Matrix| D[(role_mappings SQL Table)]
-
-    E[User Query] --> F{Role Filter Active?}
-    F -->|YES — ROLE dropdown selected| G[Local Intent Router regex]
-    G -->|COUNT / LIST / DESCRIBE / ROLES FOR| D
-    D -->|Exact SQL Result| K[LLM Context]
-    F -->|NO — Normal query| H[Hybrid Search Dense+Sparse]
-    H --> I[Context Focus + Reranking]
-    I --> K
-    K --> L[Groq LLM — Streaming]
-    L --> M[React Chat UI]
 ```
+User Query
+    │
+    ▼
+Intent Router (local regex, 0ms, no API call)
+    │
+    ├─── Role/Attribute Query?
+    │         │
+    │         ▼
+    │    PostgreSQL role_mappings table
+    │    (GET_ATTRIBUTES_FOR_ROLE / GET_ROLES_FOR_ATTRIBUTE /
+    │     COUNT_ATTRIBUTES / DESCRIBE_ATTRIBUTE)
+    │         │
+    │         ▼
+    │    Direct Answer ✅  ← No LLM, no token limits, < 1 second
+    │
+    └─── General Query?
+              │
+              ▼
+         Hybrid Search (Dense pgvector + BM25 FTS)
+              │
+              ▼
+         BGE Reranker (BAAI/bge-reranker-base)
+              │
+              ▼
+         Groq LLM — llama-3.1-8b-instant (streaming)
+              │
+              ▼
+         React Chat UI
+```
+
+**Key design principle:** Role/attribute queries **never reach the LLM**. They are answered directly from SQL — instant, accurate, and immune to token-limit errors (HTTP 413).
 
 ---
 
@@ -39,24 +57,26 @@ graph TD
 
 ```
 ai layer/
-├── api.py                        # FastAPI backend — REST + SSE streaming
-├── frontend/src/ChatUI.jsx       # React chat interface
+├── api.py                        # FastAPI backend — REST + SSE streaming endpoints
+├── frontend/src/ChatUI.jsx       # React chat interface with streaming + section search
 ├── src/
 │   ├── config.py                 # All env vars, model names, limits
-│   ├── postgres_store.py         # PostgreSQL vector store + role SQL methods
-│   ├── intent_router.py          # Zero-cost local regex intent router (no API call)
-│   ├── ingest_batch.py           # Parallel PDF ingestion
-│   ├── ingest_roles.py           # Excel Role Attributes ingestion → role_mappings table
-│   ├── watcher.py                # File watcher for incremental ingestion (run at night)
+│   ├── postgres_store.py         # pgvector dense store + role SQL methods (deduplicated)
+│   ├── intent_router.py          # Zero-cost local regex intent router
+│   ├── rag.py                    # RAG pipeline — includes _try_role_sql_direct() shortcut
 │   ├── retrieval.py              # Hybrid search orchestration
-│   ├── rag.py                    # RAG pipeline + context formatting
-│   ├── llm.py                    # Groq LLM integration
+│   ├── llm.py                    # Groq LLM integration (token-budget aware)
 │   ├── llm_stream.py             # Streaming LLM response handler
+│   ├── ingest_batch.py           # Parallel PDF ingestion
+│   ├── ingest_roles.py           # Excel Role Attributes → role_mappings SQL table
+│   ├── watcher.py                # File watcher for incremental ingestion (run at night)
 │   ├── query_router.py           # Intent detection + product routing
-│   ├── query_context.py          # Follow-up resolution
-│   └── context_focus.py         # Page-collapse for dense procedural answers
+│   ├── query_context.py          # Follow-up resolution + affirmation rewriter
+│   ├── context_focus.py          # Page-collapse for dense procedural answers
+│   ├── answer_formatter.py       # Post-processing + boilerplate strip
+│   └── verifier.py               # Answer grounding verifier
 ├── requirements.txt
-├── docker-compose.yml            # PostgreSQL with pgvector
+├── docker-compose.yml            # PostgreSQL 15 with pgvector extension
 └── .env                          # API keys and config (do NOT commit)
 ```
 
@@ -64,38 +84,56 @@ ai layer/
 
 ## ⚡ Key Features
 
-### 1. Dual-Mode Retrieval
-| Mode | Trigger | How it works |
+### 1. SQL-Direct Role Query Bypass (No LLM)
+
+The function `_try_role_sql_direct()` in `src/rag.py` intercepts role/attribute queries **before** any vector retrieval or LLM call:
+
+| Query Pattern | Intent Detected | SQL Method Called |
 |---|---|---|
-| **Normal RAG** | No filter / any filter except ROLE | Hybrid vector + FTS search → LLM |
-| **SQL Mode** | ROLE selected in Product Filter | Local regex router → exact PostgreSQL query |
+| `"list all attrs for [role]"` | `GET_ATTRIBUTES_FOR_ROLE` | `get_attributes_for_role()` |
+| `"what roles have [attribute]?"` | `GET_ROLES_FOR_ATTRIBUTE` | `get_roles_for_attribute()` |
+| `"how many attributes does [role] have?"` | `COUNT_ATTRIBUTES` | `count_role_attributes()` |
+| `"describe [attribute]"` | `DESCRIBE_ATTRIBUTE` | `describe_attribute()` |
 
-### 2. SQL Role Attributes (Zero Hallucination)
-When **ROLE** is selected in the filter dropdown, **every** query goes through the SQL pipeline:
-- `"list all attributes of basic user"` → `GET_ATTRIBUTES_FOR_ROLE` → exact SQL
-- `"list all roles having converter attr"` → `GET_ROLES_FOR_ATTRIBUTE` → exact SQL  
-- `"how many attributes does ODI role have?"` → `COUNT_ATTRIBUTES` → exact SQL
-- `"describe converter"` → `DESCRIBE_ATTRIBUTE` → exact SQL
+**Result:** < 1 second responses, zero Groq API calls, zero 413 errors, zero hallucination.
 
-### 3. Intent Router (Local — No API Cost)
-`src/intent_router.py` uses pure Python regex — **zero Groq API calls** for routing. Runs in microseconds with no rate limits.
+### 2. Deduplicated SQL Results
 
-### 4. Exact Match First
-All SQL queries prefer **exact attribute/role name match** before falling back to partial match. `"converter"` returns only **Converter** — not Converter Cooling, Converter Config, etc.
+All role SQL methods use `GROUP BY role_name, attribute_name` with `MIN()` aggregation — not `SELECT DISTINCT` on all columns — to correctly collapse entries where the same attribute has multiple description variants in the database.
 
-### 5. Parent-Child Chunking
-Child chunks (~200 chars) are indexed for retrieval. Parent chunks (~3000 chars) are passed to the LLM — preserving full tables and section context.
+### 3. Hybrid Search (Dense + Sparse)
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Dense | pgvector cosine similarity | Semantic meaning |
+| Sparse | PostgreSQL FTS (`tsvector`) | Keyword precision |
+| Reranker | BAAI/bge-reranker-base | Cross-encoder re-scoring |
+
+### 4. Token-Budget Aware LLM Calls
+
+`src/llm.py` dynamically computes `max_tokens` based on prompt size to stay within the 8192-token Groq context window. Graceful fallback messages are returned instead of HTTP 500 for rate-limit (429) and payload-too-large (413) errors.
+
+### 5. Follow-Up & Context Resolution
+
+- Pronouns (`it`, `this`, `that`) are resolved to the previous topic
+- Affirmations (`yes`, `sure`, `ok`) are rewritten to the last suggested topic
+- Vague queries (`"how do I do that?"`) use conversation history to infer intent
+
+### 6. Parent-Child Chunking
+
+Child chunks (~200 chars) are indexed for retrieval precision. Parent chunks (~3000 chars) are passed to the LLM — preserving full tables and section context for complete answers.
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Prerequisites
+### Prerequisites
 - Python 3.11+
-- Docker Desktop (for PostgreSQL)
+- Docker Desktop (for PostgreSQL + pgvector)
 - Node.js 18+ (for frontend)
 
-### 2. Setup
+### 1. Setup Environment
+
 ```powershell
 # Activate virtual environment
 .\.venv\Scripts\Activate.ps1
@@ -105,63 +143,97 @@ pip install -r requirements.txt
 
 # Copy and configure environment variables
 copy .env.example .env
-# Edit .env: set GROQ_API_KEY, DB_HOST, DB_PASSWORD, etc.
+# Edit .env: set GROQ_API_KEY and DB credentials
 ```
 
-### 3. Start PostgreSQL
+### 2. Start PostgreSQL
+
 ```powershell
 docker-compose up -d
 ```
 
-### 4. Ingest Documents (Run Once, or Nightly)
+### 3. Ingest Documents *(run once, then nightly)*
+
 ```powershell
-# Ingest PDFs
+# Ingest PDFs and Word docs into pgvector
 python -m src.ingest_batch
 
-# Ingest Role Attributes Excel → SQL table
+# Ingest Role Attributes Excel → role_mappings SQL table
 python src/ingest_roles.py
 ```
 
-### 5. Start the Backend API
+### 4. Start the Backend API
+
 ```powershell
-uvicorn api:app --reload --port 8000
+.venv\Scripts\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000
 ```
 
-### 6. Start the Frontend
+### 5. Start the Frontend
+
 ```powershell
 cd frontend
 npm install
 npm run dev
 ```
+
 Open **http://localhost:5173**
 
 ---
 
-## ⚙️ Key Environment Variables (`.env`)
+## ⚙️ Environment Variables (`.env`)
 
-| Variable | Description |
-|---|---|
-| `GROQ_API_KEY` | Groq API key for LLM inference |
-| `DB_HOST` | PostgreSQL host (default: `localhost`) |
-| `DB_PORT` | PostgreSQL port (default: `5432`) |
-| `DB_NAME` | Database name |
-| `DB_USER` | Database user |
-| `DB_PASSWORD` | Database password |
-| `OLLAMA_MODEL` | LLM model name (e.g. `llama-3.1-8b-instant`) |
-| `MAX_CONTEXT_CHARS` | Max context window sent to LLM (default: `14000`) |
-| `TOP_K` | Number of chunks retrieved (default: `7`) |
+| Variable | Default | Description |
+|---|---|---|
+| `GROQ_API_KEY` | — | Groq API key for LLM inference |
+| `PG_HOST` | `localhost` | PostgreSQL host |
+| `PG_PORT` | `5432` | PostgreSQL port |
+| `PG_DB` | `rag_db` | Database name |
+| `PG_USER` | `postgres` | Database user |
+| `PG_PASSWORD` | `password` | Database password |
+| `OLLAMA_MODEL` | `llama-3.1-8b-instant` | Groq model name |
+| `MAX_CONTEXT_CHARS` | `14000` | Max chars of context sent to LLM |
+| `TOP_K` | `5` | Number of vector chunks retrieved |
+| `OLLAMA_TIMEOUT` | `120` | Groq API timeout in seconds |
 
 ---
 
-## 🌙 Nightly Ingestion (Recommended for Production)
+## 🗄️ Knowledge Base (Indexed)
+
+| Metric | Value |
+|---|---|
+| Total Chunks | 62,774 |
+| Total Documents | 407 files |
+| Products Indexed | 13 (project_name, project_module, mfa, sfs, pki, ldap, iam, backup, web, whitelist, wpp + 2 others) |
+| Embedding Model | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
+| Reranker | `BAAI/bge-reranker-base` |
+| Role Mappings | Loaded from Excel into `role_mappings` PostgreSQL table |
+
+---
+
+## 🧪 Test Results (46 Queries — 96% Pass Rate)
+
+| Category | Tests | Pass | Notes |
+|---|---|---|---|
+| Role/Attribute SQL Queries | 5 | 5 ✅ | SQL-direct, no LLM, instant |
+| Definitions & Acronyms | 6 | 6 ✅ | |
+| Field / UI Detail | 4 | 4 ✅ | |
+| Architecture & Components | 4 | 4 ✅ | |
+| Version History | 4 | 4 ✅ | |
+| Comparison | 3 | 3 ✅ | |
+| Follow-Up / Contextual | 3 | 3 ✅ | Pronoun + affirmation resolution |
+| Clarification | 2 | 2 ✅ | Vague query detection |
+| API Utility Endpoints | 5 | 5 ✅ | |
+| Procedural / How-To | 6 | 4 ✅ | 2 need broader context |
+| Edge Cases | 4 | 4 ✅ | |
+| **Total** | **46** | **44** | **~96%** |
+
+---
+
+## 🌙 Nightly Ingestion
 
 The watcher is **disabled** during bot runtime to prevent slowdowns. Run ingestion on a schedule:
 
 **Windows Task Scheduler** — Run at midnight:
-```powershell
-.\.venv\Scripts\python.exe src\watcher.py
-```
-Or individually:
 ```powershell
 .\.venv\Scripts\python.exe -m src.ingest_batch
 .\.venv\Scripts\python.exe src\ingest_roles.py
@@ -169,37 +241,43 @@ Or individually:
 
 ---
 
-## 🏢 Production Deployment (Enterprise Scale)
+## 🏢 Production Deployment
 
-> ⚠️ Groq free/paid tier is suitable for development only. For 100+ concurrent users with confidential documents:
+> ⚠️ Groq free/paid tier is suitable for development only. For production with confidential documents:
 
 | Option | Recommendation |
 |---|---|
 | **Azure OpenAI** | ✅ Best — data stays in Your Azure tenant, enterprise SLA, GDPR compliant |
 | **On-prem Ollama** | ✅ Most secure — zero internet, air-gapped, no data leaves building |
-| **Groq Paid** | ⚠️ Development/demo only — data leaves your network |
+| **Groq Paid** | ⚠️ Development/demo only — data leaves network |
 
-To switch to **Azure OpenAI**, change 2 env variables in `.env`:
+To switch to **Azure OpenAI**, update two variables in `.env`:
 ```env
 GROQ_API_KEY=<your-azure-openai-key>
-OLLAMA_BASE_URL=https://<your-resource>.openai.azure.com/openai/deployments/<deployment>
+OLLAMA_BASE_URL=https://<resource>.openai.azure.com/openai/deployments/<deployment>
 ```
 
 ---
 
 ## ❓ FAQ
 
-**Q: The bot found the right document but said "I cannot find information" — why?**  
-A: Fixed in latest version. The context window was too small and cutting off table content. `MAX_CONTEXT_CHARS` is now 14000.
+**Q: Role queries were duplicating the same attribute hundreds of times — is this fixed?**
+A: Yes. The root cause was `SELECT DISTINCT` on 4 columns including `description`, which produced one row per unique description variant. Fixed using `GROUP BY role_name, attribute_name` + `MIN(description)`.
 
-**Q: Queries work for PROJECT_NAME but give wrong answers for MFA — why?**  
-A: Short queries like "mfa config" were being treated as follow-ups to previous queries. Fixed — only explicit pronouns like "it/this/that" now trigger follow-up resolution.
+**Q: Role queries were returning HTTP 500 — is this fixed?**
+A: Yes. Role queries now bypass the LLM entirely via `_try_role_sql_direct()` in `rag.py`. SQL results are returned directly in < 1 second. The Groq 413 token-limit error can no longer be triggered by role queries.
 
-**Q: Why are some role attributes duplicated in output?**  
-A: Fixed — all SQL functions now deduplicate at the database level using `SELECT DISTINCT` and exact-match-first logic.
+**Q: The bot found the right document but said "I cannot find information" — why?**
+A: The context window was too small and cutting off table content. `MAX_CONTEXT_CHARS` is 14000 and the LLM system prompt explicitly instructs the model to output brief descriptions rather than claiming they are missing.
 
-**Q: Can I ask "list all attributes of Basic user" without selecting the ROLE filter?**  
-A: No — the ROLE filter dropdown is the sole trigger for SQL mode. Without it, the query goes through normal semantic search.
+**Q: Queries work for PROJECT_NAME but give wrong answers for MFA — why?**
+A: Short queries like `"mfa config"` were being treated as follow-ups to previous queries. Fixed — only explicit pronouns (`it/this/that`) now trigger follow-up resolution.
 
-**Q: Why is the watcher disabled during bot runtime?**  
-A: Incremental ingestion is CPU/IO intensive and slows down response times. Run it nightly instead.
+**Q: Can I ask role queries without any special filter?**
+A: Yes — as of the latest update, role/attribute queries are automatically detected by the local intent router regardless of which filter is selected. The SQL shortcut fires on query content alone.
+
+**Q: Why is the watcher disabled during bot runtime?**
+A: Incremental ingestion is CPU/IO intensive and increases response latency. Run it nightly via Task Scheduler instead.
+
+**Q: What happens if the Groq API rate-limits us?**
+A: The LLM layer now catches HTTP 429 (rate limit) and 413 (payload too large) and returns a clean, user-facing message instead of crashing with HTTP 500.

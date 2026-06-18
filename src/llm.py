@@ -54,6 +54,21 @@ def generate(
 ) -> str:
     import src.config as _cfg
 
+    # ── Token budget: Groq llama-3.1-8b-instant has an 8192 token context limit.
+    # Estimate tokens (4 chars ≈ 1 token), then cap prompt so 413 never happens.
+    GROQ_CTX_LIMIT = 8192
+    SAFETY_BUFFER  = 200   # reserve headroom for model output + overhead
+    prompt_chars  = len(system or "") + len(prompt)
+    estimated_tokens = prompt_chars // 4
+    available_output  = GROQ_CTX_LIMIT - estimated_tokens - SAFETY_BUFFER
+    max_tokens = max(300, min(available_output, _cfg.OLLAMA_NUM_PREDICT))
+
+    # If the prompt itself is already too large, trim the Context section inside it.
+    MAX_PROMPT_CHARS = (GROQ_CTX_LIMIT - SAFETY_BUFFER - max_tokens) * 4
+    if len(prompt) > MAX_PROMPT_CHARS:
+        prompt = prompt[:MAX_PROMPT_CHARS]
+        print(f"[LLM] Prompt trimmed to {MAX_PROMPT_CHARS} chars to stay within Groq token limit.")
+
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -63,7 +78,7 @@ def generate(
         "model": _cfg.OLLAMA_MODEL,
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": _cfg.OLLAMA_NUM_PREDICT,
+        "max_tokens": max_tokens,
         "stream": False,
     }
 
@@ -85,7 +100,29 @@ def generate(
                 json=payload,
             )
 
-            r.raise_for_status()
+            # Gracefully handle Groq API errors instead of letting
+            # raise_for_status() bubble up as an unhandled HTTP 500.
+            if r.status_code == 429:
+                return (
+                    "I'm currently rate-limited by the AI service. "
+                    "Please wait a moment and try again."
+                )
+            if r.status_code == 413:
+                return (
+                    "The retrieved context is too large for the AI model. "
+                    "Try narrowing your question or applying a product filter."
+                )
+            if not r.is_success:
+                error_detail = ""
+                try:
+                    error_detail = r.json().get("error", {}).get("message", "")
+                except Exception:
+                    pass
+                print(f"[LLM] Groq API error {r.status_code}: {error_detail}")
+                return (
+                    f"The AI service returned an error (HTTP {r.status_code}). "
+                    f"Please try rephrasing your question."
+                )
 
             return (
                 r.json()
@@ -101,6 +138,14 @@ def generate(
             f"Groq API did not finish within "
             f"{int(_cfg.OLLAMA_TIMEOUT)}s."
         ) from e
+
+    except httpx.HTTPStatusError as e:
+        # Catch any status errors that slipped through
+        print(f"[LLM] HTTPStatusError: {e}")
+        return (
+            "The AI service returned an unexpected error. "
+            "Please try rephrasing your question."
+        )
 
 
 # =========================================================

@@ -286,7 +286,31 @@ def chat_stream(body: ChatRequest):
                 return
 
         # -------------------------------------------------------
-        # STEP 3: Retrieve documents
+        # STEP 3: Role SQL shortcut — answer DIRECTLY, skip LLM
+        # -------------------------------------------------------
+        # For any role/attribute relational query, the SQL DB has
+        # the exact answer. Return it immediately via SSE — no LLM,
+        # no token limits, no 413 errors, instant and accurate.
+        from src.rag import _try_role_sql_direct
+        import time as _time
+        _t0 = _time.time()
+        _role_resp = _try_role_sql_direct(
+            question=question,
+            store=store,
+            start_time=_t0,
+            retrieval_start=_t0,
+            retrieval_time=0.0,
+            intent="general",
+            mode="sql_direct",
+        )
+        if _role_resp is not None:
+            yield f"data: {json.dumps({'chunk': _role_resp.answer})}\n\n"
+            yield f"data: {json.dumps({'chunk': satisfaction_followup()})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'sources': [], 'retrieval_mode': 'sql_direct'})}\n\n"
+            return
+
+        # -------------------------------------------------------
+        # STEP 4: Retrieve documents (non-role queries only)
         # -------------------------------------------------------
         hits, plan = retrieve(
             question,
@@ -295,7 +319,7 @@ def chat_stream(body: ChatRequest):
             plan=plan,
             product_filter=body.product_filter,
             file_filter=body.file_filter,
-            final_k=15, # Increased from default 7 to 15 to guarantee enough chunks for all 30+ role attributes
+            final_k=15,
         )
 
         if not hits:
@@ -304,48 +328,6 @@ def chat_stream(body: ChatRequest):
             return
 
         context, sources = _format_context(hits)
-        
-        # SQL Database Relational Interception
-        # Sole trigger: the user selected 'Role Attributes' in the filter dropdown.
-        # No query keyword checks needed — the filter IS the differentiator.
-        q_lower = question.lower()
-        is_role_filter_active = bool(
-            body.file_filter and "role" in body.file_filter.lower()
-        ) or bool(
-            body.product_filter and "role" in body.product_filter.lower()
-        )
-        if is_role_filter_active:
-            from src.intent_router import route_role_intent
-            
-            router_result = route_role_intent(q_lower)
-            intent = router_result["intent"]
-            entity = router_result["entity"]
-            
-            sql_blocks = []
-            if entity and hasattr(store, "query_role_database"):
-                if intent == "COUNT_ATTRIBUTES" and hasattr(store, "count_role_attributes"):
-                    res = store.count_role_attributes(entity)
-                    if res: sql_blocks.append(res)
-                elif intent == "GET_ROLES_FOR_ATTRIBUTE" and hasattr(store, "get_roles_for_attribute"):
-                    res = store.get_roles_for_attribute(entity)
-                    if res: sql_blocks.append(res)
-                elif intent == "GET_ATTRIBUTES_FOR_ROLE" and hasattr(store, "get_attributes_for_role"):
-                    res = store.get_attributes_for_role(entity)
-                    if res: sql_blocks.append(res)
-                elif intent == "DESCRIBE_ATTRIBUTE" and hasattr(store, "describe_attribute"):
-                    res = store.describe_attribute(entity)
-                    if res: sql_blocks.append(res)
-                
-                # If a specific intent was detected but the specialized SQL returned nothing, fallback to general SQL search
-                if not sql_blocks and intent != "GENERAL_SEARCH":
-                    res = store.query_role_database([entity])
-                    if res: sql_blocks.append(res)
-
-            if sql_blocks:
-                sql_context = "\n\n".join(sql_blocks)
-                # Discard semantic search results completely for exact role queries
-                hits.clear()
-                context = f"=== EXACT DATABASE MATCHES FOR ROLES & ATTRIBUTES ===\n{sql_context}"
         
         # Aggressively compress Excel boilerplate to fit more rows into Groq's strict payload limit
         context = context.replace("Item details: ", "")

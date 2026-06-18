@@ -368,6 +368,8 @@ class PostgreSQLStore:
 
     def get_roles_for_attribute(self, attr_fragment: str) -> str:
         """Return all UNIQUE roles that have a given attribute. Exact match first, partial fallback."""
+        if not attr_fragment or not attr_fragment.strip():
+            return ""
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
@@ -386,7 +388,8 @@ class PostgreSQLStore:
                         SELECT DISTINCT attribute_name
                         FROM role_mappings
                         WHERE attribute_name ILIKE %s
-                        ORDER BY attribute_name;
+                        ORDER BY attribute_name
+                        LIMIT 20;
                     """, (f"%{attr_fragment}%",))
                     attr_names = [r[0] for r in cur.fetchall()]
 
@@ -415,42 +418,57 @@ class PostgreSQLStore:
                 lines.extend(f"  {r}" for r in unique_roles)
                 return "\n".join(lines)
         except Exception as e:
-            print(f"Error in get_roles_for_attribute: {e}")
+            print(f"[DB] get_roles_for_attribute('{attr_fragment}') failed: {e}")
             return ""
         finally:
             conn.close()
 
     def get_attributes_for_role(self, role_fragment: str) -> str:
-        """Return all attributes assigned to a given role (partial match on role name)."""
+        """Return all attributes assigned to a given role (partial match on role name).
+        
+        BUG FIX: Uses MIN() aggregation instead of DISTINCT on all columns to avoid
+        duplicate attribute rows when description/group_name varies across DB entries
+        (e.g. 'Generate self offline passwords' appearing 100+ times).
+        """
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                # Try exact match first
+                # Try exact match first — group by role+attr to deduplicate cleanly
                 cur.execute("""
-                    SELECT DISTINCT role_name, attribute_name, description, group_name
+                    SELECT role_name,
+                           attribute_name,
+                           MIN(description) AS description,
+                           MIN(group_name)  AS group_name
                     FROM role_mappings
                     WHERE role_name ILIKE %s
+                    GROUP BY role_name, attribute_name
                     ORDER BY role_name, attribute_name;
                 """, (role_fragment,))
                 rows = cur.fetchall()
-                
+
                 # Fallback to partial match if no exact match
                 if not rows:
                     cur.execute("""
-                        SELECT DISTINCT role_name, attribute_name, description, group_name
+                        SELECT role_name,
+                               attribute_name,
+                               MIN(description) AS description,
+                               MIN(group_name)  AS group_name
                         FROM role_mappings
                         WHERE role_name ILIKE %s
+                        GROUP BY role_name, attribute_name
                         ORDER BY role_name, attribute_name;
                     """, (f"%{role_fragment}%",))
                     rows = cur.fetchall()
-                    
+
                 if not rows:
                     return ""
+
                 from collections import defaultdict
-                grouped = defaultdict(dict)
+                # Group by role → ordered dict of attr → (desc, grp)
+                grouped: defaultdict = defaultdict(dict)
                 for role, attr, desc, grp in rows:
-                    if attr not in grouped[role]:
-                        grouped[role][attr] = (desc, grp)
+                    grouped[role][attr] = (desc or "", grp or "")
+
                 lines = []
                 for role, attrs_dict in grouped.items():
                     lines.append(f"**{role}** — {len(attrs_dict)} attribute(s):")
@@ -464,18 +482,20 @@ class PostgreSQLStore:
                     lines.append("")
                 return "\n".join(lines)
         except Exception as e:
-            print(f"Error in get_attributes_for_role: {e}")
+            print(f"[DB] get_attributes_for_role('{role_fragment}') failed: {e}")
             return ""
         finally:
             conn.close()
 
     def count_role_attributes(self, role_fragment: str) -> str:
-        """Count how many attributes a given role has."""
+        """Count how many DISTINCT attributes a given role has."""
+        if not role_fragment or not role_fragment.strip():
+            return ""
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT role_name, COUNT(DISTINCT attribute_name) as cnt
+                    SELECT role_name, COUNT(DISTINCT attribute_name) AS cnt
                     FROM role_mappings
                     WHERE role_name ILIKE %s
                     GROUP BY role_name
@@ -489,7 +509,7 @@ class PostgreSQLStore:
                     lines.append(f"**{role}**: {cnt} attribute(s)")
                 return "\n".join(lines)
         except Exception as e:
-            print(f"Error in count_role_attributes: {e}")
+            print(f"[DB] count_role_attributes('{role_fragment}') failed: {e}")
             return ""
         finally:
             conn.close()

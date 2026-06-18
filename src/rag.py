@@ -384,6 +384,68 @@ def _retrieval_mode_label(
 # MAIN ASK
 # =========================================================
 
+def _try_role_sql_direct(
+    question: str,
+    store,
+    start_time: float,
+    retrieval_start: float,
+    retrieval_time: float,
+    intent: str,
+    mode: str,
+) -> "ChatResponse | None":
+    """
+    Shortcut: if the question is a role/attribute relational query,
+    answer it directly from the SQL DB — NO LLM call, no token limits,
+    no 413 errors, instant and accurate.
+
+    Returns a ChatResponse if handled, or None to fall through to the LLM.
+    """
+    from src.intent_router import route_role_intent
+
+    router_result = route_role_intent(question.lower())
+    sql_intent = router_result["intent"]
+    entity     = router_result["entity"]
+
+    if sql_intent == "GENERAL_SEARCH" or not entity:
+        return None  # not a role query — let LLM handle it
+
+    sql_answer = ""
+    try:
+        if sql_intent == "GET_ATTRIBUTES_FOR_ROLE" and hasattr(store, "get_attributes_for_role"):
+            sql_answer = store.get_attributes_for_role(entity)
+        elif sql_intent == "GET_ROLES_FOR_ATTRIBUTE" and hasattr(store, "get_roles_for_attribute"):
+            sql_answer = store.get_roles_for_attribute(entity)
+        elif sql_intent == "COUNT_ATTRIBUTES" and hasattr(store, "count_role_attributes"):
+            sql_answer = store.count_role_attributes(entity)
+        elif sql_intent == "DESCRIBE_ATTRIBUTE" and hasattr(store, "describe_attribute"):
+            sql_answer = store.describe_attribute(entity)
+
+        # If specialised method returned nothing, fall back to general DB search
+        if not sql_answer and hasattr(store, "query_role_database"):
+            sql_answer = store.query_role_database([entity])
+    except Exception as e:
+        print(f"[RAG] role SQL direct failed ({sql_intent}, '{entity}'): {e}")
+        return None  # fall through to LLM
+
+    if not sql_answer:
+        return None  # DB had nothing — let LLM try
+
+    total_time = (time.time() - start_time) * 1000
+    return ChatResponse(
+        answer=sql_answer,
+        sources=[],
+        used_llm=False,
+        note="role_sql_direct",
+        processing_time_ms=total_time,
+        retrieval_time_ms=retrieval_time,
+        num_sources_retrieved=0,
+        num_sources_used=0,
+        question_intent=sql_intent.lower(),
+        retrieval_mode="sql_direct",
+        options=[],
+    )
+
+
 def ask(
     question: str,
     store: VectorStore | None = None,
@@ -404,6 +466,24 @@ def ask(
     )
 
     retrieval_start = time.time()
+
+    # =====================================================
+    # ROLE SQL SHORTCUT — no LLM, no token limits, instant
+    # =====================================================
+    # Run intent detection BEFORE touching the vector store.
+    # If this is a role/attribute relational query, answer
+    # directly from PostgreSQL and return immediately.
+    _role_resp = _try_role_sql_direct(
+        question=question,
+        store=store,
+        start_time=start_time,
+        retrieval_start=retrieval_start,
+        retrieval_time=0.0,
+        intent="general",
+        mode="sql_direct",
+    )
+    if _role_resp is not None:
+        return _role_resp
 
     hits, plan = retrieve(
         question,
