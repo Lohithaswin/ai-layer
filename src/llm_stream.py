@@ -1,6 +1,7 @@
 import json
 import httpx
 import src.config as _cfg
+from src.config import SSL_VERIFY
 from src.llm import OllamaTimeoutError
 
 def generate_stream(prompt: str, system: str | None = None):
@@ -30,7 +31,11 @@ def generate_stream(prompt: str, system: str | None = None):
 
     timeout = httpx.Timeout(_cfg.OLLAMA_TIMEOUT, connect=30.0)
     try:
-        with httpx.Client(timeout=timeout, verify=False, headers={"Authorization": f"Bearer {_cfg.GROQ_API_KEY}"}) as client:
+        with httpx.Client(
+            timeout=timeout,
+            verify=SSL_VERIFY,  # BUG-004 fix: use configured SSL verification
+            headers={"Authorization": f"Bearer {_cfg.GROQ_API_KEY}"}
+        ) as client:
             with client.stream("POST", "https://api.groq.com/openai/v1/chat/completions", json=payload) as r:
                 r.raise_for_status()
                 for line in r.iter_lines():

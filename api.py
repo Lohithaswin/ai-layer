@@ -1,30 +1,58 @@
 """REST API for the local PDF chatbot."""
 
 import json
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+
+import httpx
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from src.rag import ChatResponse, Source, ask
+from src.config import CORS_ORIGINS
 
-app = FastAPI(title="Local PDF RAG Chatbot", version="0.2.0")
+# ── Rate limiter ─────────────────────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
 
+# ── App lifespan (replaces deprecated @app.on_event) ────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the lightweight file-queue watcher.
+    # It only writes new file paths to data/pending_ingest.json — NO ingestion,
+    # NO CPU cost. Actual ingestion happens nightly at 1 AM via Task Scheduler.
+    _observer = None
+    try:
+        from src.file_queue_watcher import start_queue_watcher
+        _observer = start_queue_watcher()
+    except Exception as e:
+        print(f"[API] File queue watcher could not start: {e}")
+
+    print("[API] Started. New files will be queued for nightly ingestion at 1:00 AM.")
+    yield
+
+    if _observer:
+        _observer.stop()
+        _observer.join()
+    print("[API] Shutting down.")
+
+app = FastAPI(title="Document Intelligence Bot", version="1.0.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── CORS — restricted to configured origins (BUG-002 fix) ──────────────────
+# Set CORS_ORIGINS env var (comma-separated) to restrict in production.
+# Default: http://localhost:5173 (Vite dev server only).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-def startup_event():
-    print("[API] Starting up. Background ingestion disabled to prevent slow downs.")
-
-@app.on_event("shutdown")
-def shutdown_event():
-    print("[API] Shutting down.")
 
 
 class HistoryMessage(BaseModel):
@@ -106,11 +134,33 @@ def _to_out(resp: ChatResponse) -> ChatResponseOut:
 def health():
     from src.config import RERANKER_MODEL, USE_HYBRID_SEARCH, USE_RERANKER
 
+    # Cache the Groq reachability result for 60 s so health checks never
+    # block on a slow API call (ISSUE-005 fix).
+    import time
+    _now = time.time()
+    _cache = getattr(app.state, "_health_cache", None)
+    if _cache and (_now - _cache["ts"]) < 60:
+        groq_ok = _cache["groq_ok"]
+    else:
+        try:
+            cfg = __import__("src.config", fromlist=["GROQ_API_KEY", "SSL_VERIFY"])
+            r = httpx.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {cfg.GROQ_API_KEY}"},
+                timeout=3.0,
+                verify=cfg.SSL_VERIFY,
+            )
+            groq_ok = r.status_code == 200
+        except Exception:
+            groq_ok = False
+        app.state._health_cache = {"groq_ok": groq_ok, "ts": _now}
+
     return {
         "status": "ok",
         "hybrid_search": USE_HYBRID_SEARCH,
         "reranker": USE_RERANKER,
         "reranker_model": RERANKER_MODEL,
+        "llm_reachable": groq_ok,
     }
 
 
@@ -148,17 +198,16 @@ def list_products():
 @app.get("/models")
 def list_models():
     """Return available models from the Groq API."""
-    import httpx
     import src.config as cfg
     try:
         r = httpx.get(
             "https://api.groq.com/openai/v1/models",
             headers={"Authorization": f"Bearer {cfg.GROQ_API_KEY}"},
-            timeout=5.0
+            timeout=5.0,
+            verify=cfg.SSL_VERIFY,
         )
         if r.status_code == 200:
             models = [m["id"] for m in r.json().get("data", [])]
-            # Optional: sort alphabetically
             models.sort()
             return {"models": models, "active": cfg.OLLAMA_MODEL}
     except Exception:
@@ -214,7 +263,8 @@ def get_section_content(section: str, source_file: str):
 
 
 @app.post("/chat", response_model=ChatResponseOut)
-def chat(body: ChatRequest):
+@limiter.limit("30/minute")
+def chat(request: Request, body: ChatRequest):
     hist = [{"role": m.role, "content": m.content} for m in body.history]
     from src.query_context import rewrite_affirmation_query
     question = rewrite_affirmation_query(body.question, hist)
@@ -235,7 +285,8 @@ from src.clarifier import should_clarify, generate_clarification, satisfaction_f
 
 
 @app.post("/chat/stream")
-def chat_stream(body: ChatRequest):
+@limiter.limit("20/minute")
+def chat_stream(request: Request, body: ChatRequest):
     def event_stream():
         hist = [{"role": m.role, "content": m.content} for m in body.history]
         from src.query_context import rewrite_affirmation_query
@@ -357,7 +408,7 @@ def chat_stream(body: ChatRequest):
         )
 
         # -------------------------------------------------------
-        # STEP 4: Stream the LLM answer
+        # STEP 5: Stream the LLM answer
         # -------------------------------------------------------
         for chunk in generate_stream(prompt, system=SYSTEM_PROMPT):
             yield f"data: {json.dumps({'chunk': chunk})}\n\n"

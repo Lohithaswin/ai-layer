@@ -1088,3 +1088,144 @@ input, select, textarea { font-family: var(--font); }
   .header-brand { display: none; }
   .section-search-wrapper { max-width: none; flex: 1; }
 }
+
+/* ─── CHAT TABS ─── */
+.chat-tabs-section {
+  padding-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+
+.chat-tabs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.new-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  flex-shrink: 0;
+}
+.new-chat-btn:hover {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  transform: scale(1.08);
+}
+
+.chat-tabs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 2px;
+  margin-bottom: 8px;
+}
+.chat-tabs-list::-webkit-scrollbar { width: 3px; }
+.chat-tabs-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.chat-tab-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background 0.15s, border-color 0.15s;
+  min-width: 0;
+}
+.chat-tab-item:hover {
+  background: rgba(139, 92, 246, 0.07);
+  border-color: var(--border);
+}
+.chat-tab-item.active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+}
+
+.chat-tab-name {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.chat-tab-item.active .chat-tab-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.chat-tab-rename-input {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  outline: none;
+  min-width: 0;
+}
+
+.chat-tab-actions {
+  display: flex;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+.chat-tab-item:hover .chat-tab-actions,
+.chat-tab-item.active .chat-tab-actions {
+  opacity: 1;
+}
+
+.chat-tab-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  padding: 0;
+}
+.chat-tab-action-btn:hover {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--accent);
+}
+.chat-tab-action-btn.delete:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+/* Dark theme overrides for tabs */
+.dark-theme .chat-tab-item:hover {
+  background: rgba(139, 92, 246, 0.1);
+}
+.dark-theme .chat-tab-item.active {
+  background: rgba(139, 92, 246, 0.18);
+}
+.dark-theme .chat-tab-rename-input {
+  background: var(--bg-card);
+}

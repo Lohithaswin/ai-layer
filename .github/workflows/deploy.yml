@@ -1,0 +1,169 @@
+# ============================================================
+# PROJECT_NAME Bot — CI/CD Pipeline (GitHub Actions / Azure DevOps)
+# ============================================================
+# Trigger: push to main (after PR merge)
+# Steps:
+#   1. Run tests
+#   2. Build Docker image
+#   3. Push to Azure Container Registry
+#   4. Deploy to AKS (rolling update, zero downtime)
+# ============================================================
+
+name: Build and Deploy PROJECT_NAME Bot
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:           # allow manual trigger from GitHub UI
+
+env:
+  ACR_NAME: project_name               # Azure Container Registry name
+  IMAGE_NAME: project_name-bot-api
+  AKS_CLUSTER: project_name-aks
+  AKS_RESOURCE_GROUP: rg-project_name-prod
+  NAMESPACE: project_name
+
+jobs:
+  # ── Job 1: Test ─────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: rag_db_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test_password_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: "pip"
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run test suite
+      env:
+        PG_HOST: localhost
+        PG_PORT: 5432
+        PG_DB: rag_db_test
+        PG_USER: postgres
+        PG_PASSWORD: test_password_ci
+        GROQ_API_KEY: ${{ secrets.GROQ_API_KEY_TEST }}
+        CORS_ORIGINS: http://localhost:5173
+        SSL_VERIFY: "true"
+        # Use relative paths — no hardcoded user paths
+        DOCS_DIR: ./docs_input
+        ROLE_ATTR_DIR: ./role_attrs
+      run: |
+        pytest tests/ -v --tb=short --timeout=60
+
+  # ── Job 2: Build & Push Docker Image ────────────────────────
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Login to ACR
+      run: az acr login --name ${{ env.ACR_NAME }}
+
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}
+        tags: |
+          type=sha,prefix=,suffix=,format=short
+          type=ref,event=branch
+          type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=registry,ref=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+        cache-to: type=inline
+
+  # ── Job 3: Deploy to AKS ─────────────────────────────────────
+  deploy:
+    name: Deploy to AKS
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Get AKS credentials
+      run: |
+        az aks get-credentials \
+          --resource-group ${{ env.AKS_RESOURCE_GROUP }} \
+          --name ${{ env.AKS_CLUSTER }} \
+          --overwrite-existing
+
+    - name: Apply K8s manifests (config, services)
+      run: |
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/services.yaml
+
+    - name: Rolling deploy — update image tag
+      run: |
+        IMAGE="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}"
+        kubectl set image deployment/project_name-bot-api api="$IMAGE" -n ${{ env.NAMESPACE }}
+        kubectl rollout status deployment/project_name-bot-api -n ${{ env.NAMESPACE }} --timeout=5m
+
+    - name: Verify deployment health
+      run: |
+        kubectl get pods -n ${{ env.NAMESPACE }} -l app=project_name-bot-api
+        # Wait for at least 2 pods to be ready
+        kubectl wait --for=condition=Ready pod \
+          -l app=project_name-bot-api \
+          -n ${{ env.NAMESPACE }} \
+          --timeout=120s
+
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "::error::Deployment failed! Check AKS pod logs:"
+        kubectl logs -l app=project_name-bot-api -n ${{ env.NAMESPACE }} --tail=50

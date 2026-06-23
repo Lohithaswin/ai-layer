@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './ChatUI.css';
-import { Zap, Bot, User, Search, FileText, Clock, BarChart2, Download, Sun, Moon, Paperclip, Send, HelpCircle, FolderOpen, PanelLeftClose, PanelLeftOpen, X, ChevronRight, ChevronDown, Copy, Square } from 'lucide-react';
+import { Zap, Bot, User, Search, FileText, Clock, BarChart2, Download, Sun, Moon, Paperclip, Send, HelpCircle, FolderOpen, PanelLeftClose, PanelLeftOpen, X, ChevronRight, ChevronDown, Copy, Square, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -57,14 +57,88 @@ function renderMarkdown(text, onCitation) {
   });
 }
 
+// ── Chat session helpers ───────────────────────────────────────────────────
+const WELCOME_MESSAGE = {
+  role: 'assistant',
+  content: 'Hello! I\'m your **Document Intelligence Assistant**. Ask me anything about YOUR_PRODUCT — I\'ll search through all indexed PDFs and deliver precise, sourced answers.\n\nYou can also use the **section search bar** above to jump directly to any section.',
+  sources: [],
+};
+
+const newChat = (id, name) => ({ id, name, messages: [WELCOME_MESSAGE], createdAt: Date.now() });
+
+const loadChats = () => {
+  try {
+    const raw = localStorage.getItem('project_name_chats');
+    if (raw) { const parsed = JSON.parse(raw); if (parsed?.length) return parsed; }
+  } catch {}
+  return [newChat('chat-1', 'Chat 1')];
+};
+
+const saveChats = (chats) => {
+  try { localStorage.setItem('project_name_chats', JSON.stringify(chats)); } catch {}
+};
+
 export function ChatUI() {
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content: 'Hello! I\'m your **Document Intelligence Assistant**. Ask me anything about YOUR_PRODUCT — I\'ll search through all indexed PDFs and deliver precise, sourced answers.\n\nYou can also use the **section search bar** above to jump directly to any section.',
-      sources: [],
-    },
-  ]);
+  // ── Multi-chat session state ──────────────────────────────────────────────
+  const [chats, setChats] = useState(loadChats);
+  const [activeChatId, setActiveChatId] = useState(() => {
+    try { return localStorage.getItem('project_name_active_chat') || 'chat-1'; } catch { return 'chat-1'; }
+  });
+  const [editingChatId, setEditingChatId] = useState(null);
+  const [editingName, setEditingName] = useState('');
+
+  // Derived: messages for the active chat
+  const activeChat = chats.find(c => c.id === activeChatId) || chats[0];
+  const messages = activeChat?.messages || [];
+
+  const setMessages = (updater) => {
+    setChats(prev => {
+      const updated = prev.map(c =>
+        c.id === activeChatId
+          ? { ...c, messages: typeof updater === 'function' ? updater(c.messages) : updater }
+          : c
+      );
+      saveChats(updated);
+      return updated;
+    });
+  };
+
+  const createNewChat = () => {
+    const id = `chat-${Date.now()}`;
+    const name = `Chat ${chats.length + 1}`;
+    const chat = newChat(id, name);
+    setChats(prev => { const updated = [...prev, chat]; saveChats(updated); return updated; });
+    setActiveChatId(id);
+    try { localStorage.setItem('project_name_active_chat', id); } catch {}
+  };
+
+  const switchChat = (id) => {
+    setActiveChatId(id);
+    try { localStorage.setItem('project_name_active_chat', id); } catch {}
+    setEditingChatId(null);
+  };
+
+  const deleteChat = (id) => {
+    setChats(prev => {
+      const filtered = prev.filter(c => c.id !== id);
+      const kept = filtered.length ? filtered : [newChat('chat-1', 'Chat 1')];
+      saveChats(kept);
+      if (activeChatId === id) setActiveChatId(kept[kept.length - 1].id);
+      return kept;
+    });
+  };
+
+  const startRename = (id, currentName) => { setEditingChatId(id); setEditingName(currentName); };
+
+  const commitRename = (id) => {
+    const trimmed = editingName.trim();
+    if (trimmed) {
+      setChats(prev => { const updated = prev.map(c => c.id === id ? { ...c, name: trimmed } : c); saveChats(updated); return updated; });
+    }
+    setEditingChatId(null);
+  };
+
+  // ── All original UI state (unchanged) ───────────────────────────────────
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [expandedSources, setExpandedSources] = useState({});
@@ -324,6 +398,59 @@ export function ChatUI() {
             {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
         </div>
+
+        {/* ── CHAT TABS ── */}
+        {sidebarOpen && (
+          <div className="sidebar-section chat-tabs-section">
+            <div className="sidebar-section-title chat-tabs-header">
+              <span>Chats</span>
+              <button className="new-chat-btn" onClick={createNewChat} title="New chat">
+                <MessageSquarePlus size={15} />
+              </button>
+            </div>
+            <div className="chat-tabs-list">
+              {chats.map(chat => (
+                <div
+                  key={chat.id}
+                  className={`chat-tab-item ${chat.id === activeChatId ? 'active' : ''}`}
+                  onClick={() => switchChat(chat.id)}
+                >
+                  {editingChatId === chat.id ? (
+                    <input
+                      className="chat-tab-rename-input"
+                      value={editingName}
+                      autoFocus
+                      onChange={e => setEditingName(e.target.value)}
+                      onBlur={() => commitRename(chat.id)}
+                      onKeyDown={e => { if (e.key === 'Enter') commitRename(chat.id); if (e.key === 'Escape') setEditingChatId(null); }}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span className="chat-tab-name" title={chat.name}>{chat.name}</span>
+                  )}
+                  <div className="chat-tab-actions">
+                    <button
+                      className="chat-tab-action-btn"
+                      title="Rename"
+                      onClick={e => { e.stopPropagation(); startRename(chat.id, chat.name); }}
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    {chats.length > 1 && (
+                      <button
+                        className="chat-tab-action-btn delete"
+                        title="Delete chat"
+                        onClick={e => { e.stopPropagation(); deleteChat(chat.id); }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {sidebarOpen && (
           <>

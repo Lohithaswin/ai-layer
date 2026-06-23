@@ -1,0 +1,151 @@
+---
+# ============================================================
+# HorizontalPodAutoscaler — scale 2–10 pods based on CPU
+# ============================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: project_name-bot-hpa
+  namespace: project_name
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: project_name-bot-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60     # wait 1 min before scaling up again
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300    # wait 5 min before scaling down (prevents flapping)
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 120
+
+---
+# ============================================================
+# Service — internal ClusterIP (traffic via Ingress only)
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: project_name-bot-api-svc
+  namespace: project_name
+spec:
+  selector:
+    app: project_name-bot-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+  type: ClusterIP
+
+---
+# ============================================================
+# Ingress — expose via Azure Application Gateway / NGINX
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: project_name-bot-ingress
+  namespace: project_name
+  annotations:
+    kubernetes.io/ingress.class: "azure/application-gateway"
+    appgw.ingress.kubernetes.io/ssl-redirect: "true"
+    appgw.ingress.kubernetes.io/connection-draining: "true"
+    appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+spec:
+  tls:
+  - hosts:
+    - project_name-bot.your-company.internal
+    secretName: project_name-tls-cert
+  rules:
+  - host: project_name-bot.your-company.internal
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: project_name-bot-api-svc
+            port:
+              number: 80
+
+---
+# ============================================================
+# ConfigMap — non-secret configuration
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: project_name-config
+  namespace: project_name
+data:
+  USE_HYBRID_SEARCH: "true"
+  USE_RERANKER: "true"
+  TOP_K: "8"
+  RETRIEVAL_CANDIDATES: "20"
+  MAX_CONTEXT_CHARS: "14000"
+  CONTEXT_FOCUS_ENABLED: "true"
+  CONTEXT_FOCUS_MAX_SOURCES: "5"
+  CORS_ORIGINS: "https://project_name-bot.your-company.internal"
+  SSL_VERIFY: "true"
+  UVICORN_WORKERS: "2"
+  EMBEDDING_MODEL: "sentence-transformers/all-MiniLM-L6-v2"
+  RERANKER_MODEL: "BAAI/bge-reranker-base"
+  PG_HOST: "project_name-pg.postgres.database.azure.com"
+  PG_PORT: "5432"
+  PG_DB: "rag_db"
+  PG_USER: "rag_admin"
+  DOCS_DIR: "/app/documents/release"
+  ROLE_ATTR_DIR: "/app/documents/role-attrs"
+
+---
+# ============================================================
+# PersistentVolumeClaim — shared data (BM25 index, ChromaDB)
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: project_name-data-pvc
+  namespace: project_name
+spec:
+  accessModes:
+  - ReadOnlyMany          # multiple pods read the same index
+  storageClassName: azurefile-csi
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: project_name-docs-pvc
+  namespace: project_name
+spec:
+  accessModes:
+  - ReadOnlyMany          # documents are read-only at runtime
+  storageClassName: azurefile-csi
+  resources:
+    requests:
+      storage: 50Gi

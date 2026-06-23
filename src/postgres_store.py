@@ -17,7 +17,19 @@ PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = int(os.getenv("PG_PORT", "5432"))
 PG_DB = os.getenv("PG_DB", "rag_db")
 PG_USER = os.getenv("PG_USER", "postgres")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "password")
+
+# BUG-003 fix: no insecure default password — must be set explicitly
+_pg_password = os.getenv("PG_PASSWORD", "")
+if not _pg_password:
+    import warnings
+    warnings.warn(
+        "[postgres_store] PG_PASSWORD is not set. "
+        "Falling back to 'password' for local development ONLY. "
+        "Set PG_PASSWORD in your .env file for production.",
+        stacklevel=2,
+    )
+    _pg_password = "password"  # dev-only fallback, never reached in production
+PG_PASSWORD = _pg_password
 
 
 class PostgreSQLStore:

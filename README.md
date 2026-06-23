@@ -76,7 +76,11 @@ ai layer/
 │   ├── answer_formatter.py       # Post-processing + boilerplate strip
 │   └── verifier.py               # Answer grounding verifier
 ├── requirements.txt
-├── docker-compose.yml            # PostgreSQL 15 with pgvector extension
+├── docker-compose.prod.yml       # Production Tier 1 deployment (Single VM)
+├── Dockerfile                    # Multi-stage production container build
+├── k8s/                          # Kubernetes (AKS) deployment manifests
+├── .github/workflows/deploy.yml  # CI/CD pipeline for GitHub/Azure DevOps
+├── .env.production               # Secure production environment template
 └── .env                          # API keys and config (do NOT commit)
 ```
 
@@ -165,7 +169,7 @@ python src/ingest_roles.py
 ### 4. Start the Backend API
 
 ```powershell
-.venv\Scripts\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000
 ```
 
 ### 5. Start the Frontend
@@ -176,7 +180,17 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173**
+Open **http://localhost:5174** (or `5173` depending on port availability).
+
+---
+
+## 🔒 Security Configuration
+
+For local development vs. production, the `.env` file uses these secure defaults:
+
+- `SSL_VERIFY=false`: Used locally due to your corporate proxy SSL interception. On Azure production, set to `true` or point to a CA bundle.
+- `CORS_ORIGINS`: Restricts API access. Local defaults to `http://localhost:5173,http://localhost:5174`. Production should be `https://project_name-bot.your-company.internal`.
+- `PG_PASSWORD`: No default. Production deployments will fail to start if this is not securely configured.
 
 ---
 
@@ -251,11 +265,40 @@ The watcher is **disabled** during bot runtime to prevent slowdowns. Run ingesti
 | **On-prem Ollama** | ✅ Most secure — zero internet, air-gapped, no data leaves building |
 | **Groq Paid** | ⚠️ Development/demo only — data leaves network |
 
-To switch to **Azure OpenAI**, update two variables in `.env`:
+### How to Switch to Azure OpenAI
+If you obtain an Azure OpenAI Studio API Key, you do not need to rewrite any code. The application uses `httpx` and `openai` compliant paths. Just update your `.env` file:
+
 ```env
+# 1. Your Azure OpenAI API Key
 GROQ_API_KEY=<your-azure-openai-key>
-OLLAMA_BASE_URL=https://<resource>.openai.azure.com/openai/deployments/<deployment>
+
+# 2. Your Azure Endpoint URL
+# Must follow this format: https://<resource-name>.openai.azure.com/openai/deployments/<deployment-name>
+OLLAMA_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/gpt-4o-mini
+
+# 3. Model Name (must match your Azure deployment name)
+OLLAMA_MODEL=gpt-4o-mini
 ```
+
+### Deployment Tiers Included
+
+1. **Tier 1 (Department VM)**: Use `docker-compose.prod.yml`. It runs the backend, PostgreSQL, and a separate background ingestion job.
+2. **Tier 2 (Enterprise AKS)**: Use the `k8s/` folder. It contains a Deployment, Service, HPA (Horizontal Pod Autoscaler), and Ingress configured for Azure Application Gateway.
+
+---
+
+## 🚀 Future Improvements
+
+While the core RAG engine is fully robust, these improvements are recommended before a Tier 2 Enterprise rollout:
+
+1. **Azure Active Directory (Entra ID) Authentication**: 
+   - Integrate MSAL (Microsoft Authentication Library) in the React frontend.
+   - Add OAuth2 bearer token verification in FastAPI (`api.py`) to restrict bot access to authorized your employees only.
+2. **Conversation Persistence & Analytics**:
+   - Currently, chat history is held in browser memory. Add a PostgreSQL table to store chat sessions.
+   - This allows users to resume chats and gives admins a dashboard to see which questions are asked most frequently.
+3. **Application Insights / Monitoring**:
+   - Add the `azure-monitor-opentelemetry` package to automatically log API response times, LLM latency, and user errors directly to Azure Monitor.
 
 ---
 

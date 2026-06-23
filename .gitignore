@@ -23,6 +23,10 @@ frontend/dist/
 
 # Logs
 *.log
+logs/
 
 # Documents (optional)
 docs/
+
+# Nightly ingest queue (runtime-generated, not for git)
+data/pending_ingest.json

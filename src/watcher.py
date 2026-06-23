@@ -25,14 +25,18 @@ class DebouncedHandler(FileSystemEventHandler):
                 print("\n[Watcher] Detected changes in ROLE_ATTR_DIR. Triggering role ingestion...")
                 # Run the exact match SQL ingestion
                 ingest_role_sql()
-                # Run the vector db role ingestion (as a subprocess to avoid module conflicts)
-                script_path = Path(__file__).resolve().parent.parent / "scripts" / "ingest_roles.py"
+                # MIN-006 fix: use the correct path to the role ingestion script
                 project_root = Path(__file__).resolve().parent.parent
-                subprocess.run(
-                    [sys.executable, str(script_path)],
-                    capture_output=True,
-                    cwd=str(project_root)
-                )
+                # Prefer scripts/ingest_roles.py if it exists, else fall back to src/role_ingestor.py
+                script_path = project_root / "scripts" / "ingest_roles.py"
+                if not script_path.exists():
+                    script_path = project_root / "src" / "role_ingestor.py"
+                if script_path.exists():
+                    subprocess.run(
+                        [sys.executable, str(script_path)],
+                        capture_output=True,
+                        cwd=str(project_root)
+                    )
                 print("[Watcher] Role ingestion complete.")
         except Exception as e:
             print(f"[Watcher] Error during ingestion: {e}")

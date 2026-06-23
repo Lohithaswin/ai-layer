@@ -18,6 +18,7 @@ from src.config import (
     OLLAMA_MODEL,
     OLLAMA_NUM_PREDICT,
     OLLAMA_TIMEOUT,
+    SSL_VERIFY,
 )
 from src.verifier import (
     apply_verifier,
@@ -41,7 +42,7 @@ def ollama_available() -> bool:
             "https://api.groq.com/openai/v1/models",
             headers={"Authorization": f"Bearer {_cfg.GROQ_API_KEY}"},
             timeout=5.0,
-            verify=False,
+            verify=SSL_VERIFY,  # BUG-004 fix: use configured SSL verification
         )
         return r.status_code == 200
     except Exception:
@@ -91,7 +92,7 @@ def generate(
 
         with httpx.Client(
             timeout=timeout,
-            verify=False,
+            verify=SSL_VERIFY,  # BUG-004 fix: use configured SSL verification
             headers={"Authorization": f"Bearer {_cfg.GROQ_API_KEY}"}
         ) as client:
 

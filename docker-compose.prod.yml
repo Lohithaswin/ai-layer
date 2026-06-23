@@ -1,0 +1,104 @@
+version: "3.9"
+
+# ============================================================
+# PROJECT_NAME Bot — Production Docker Compose
+# ============================================================
+# Used for Tier 1 (single VM) deployment.
+# Run:  docker compose -f docker-compose.prod.yml up -d
+# ============================================================
+
+services:
+
+  # ── FastAPI Backend ───────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: project_name-bot-api:latest
+    container_name: project_name-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"   # bind to loopback only — Nginx proxies externally
+    environment:
+      - UVICORN_WORKERS=2
+    env_file:
+      - .env                    # mount your .env (never commit with real secrets)
+    volumes:
+      # Mount document and data folders from the host
+      - ${DOCS_DIR:-./docs_input}:/app/documents/release:ro
+      - ${ROLE_ATTR_DIR:-./role_attrs}:/app/documents/role-attrs:ro
+      - project_name-data:/app/data     # persists BM25 index + ChromaDB across restarts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import httpx; r=httpx.get('http://localhost:8000/health',timeout=5); exit(0 if r.status_code==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ── PostgreSQL 15 + pgvector ──────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: project_name-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"   # loopback only — not exposed to internet
+    environment:
+      - POSTGRES_DB=${PG_DB:-rag_db}
+      - POSTGRES_USER=${PG_USER:-postgres}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:?PG_PASSWORD must be set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d ${PG_DB:-rag_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Nightly Ingestion Job ─────────────────────────────────
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: project_name-bot-api:latest
+    container_name: project_name-ingest
+    restart: "no"               # runs once, then exits
+    command: >
+      sh -c "
+        python -m src.ingest_batch &&
+        python -m src.role_ingestor
+      "
+    env_file:
+      - .env
+    volumes:
+      - ${DOCS_DIR:-./docs_input}:/app/documents/release:ro
+      - ${ROLE_ATTR_DIR:-./role_attrs}:/app/documents/role-attrs:ro
+      - project_name-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - ingest                  # only runs when: docker compose --profile ingest up
+
+volumes:
+  pgdata:
+    name: project_name-pgdata
+  project_name-data:
+    name: project_name-data

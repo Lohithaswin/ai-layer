@@ -1,0 +1,47 @@
+[Unit]
+Description=Document Intelligence Bot Bot (FastAPI)
+Documentation=https://github.com/YourOrg/document-bot
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=project_name
+Group=project_name
+WorkingDirectory=/opt/project_name-bot
+
+# Load secrets from .env file (keep outside git repo)
+EnvironmentFile=/opt/project_name-bot/.env
+
+# Start FastAPI with 2 workers; can be overridden via .env
+ExecStart=/opt/project_name-bot/.venv/bin/uvicorn api:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info \
+    --access-log
+
+# Graceful shutdown — let in-flight requests complete
+ExecStop=/bin/kill -s SIGTERM $MAINPID
+TimeoutStopSec=30
+
+# Auto-restart on crash
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/project_name-bot/data /var/log/project_name
+PrivateTmp=yes
+CapabilityBoundingSet=
+
+# Logging to journald (use: journalctl -u project_name-bot -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=project_name-bot
+
+[Install]
+WantedBy=multi-user.target

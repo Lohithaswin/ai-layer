@@ -1,0 +1,38 @@
+# ============================================================
+# PROJECT_NAME Bot — Kubernetes Namespace + RBAC
+# ============================================================
+# Apply this FIRST before any other k8s manifests:
+#   kubectl apply -f k8s/namespace.yaml
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: project_name
+  labels:
+    team: your-team
+    environment: production
+
+---
+# ============================================================
+# Secret — create manually (or via Key Vault CSI driver)
+# ============================================================
+# DO NOT store real values here. Create via CLI:
+#
+#   kubectl create secret generic project_name-secrets \
+#     --namespace=project_name \
+#     --from-literal=GROQ_API_KEY="<azure-openai-key>" \
+#     --from-literal=PG_PASSWORD="<strong-password>" \
+#     --from-literal=OLLAMA_MODEL="gpt-4o-mini" \
+#     --from-literal=OLLAMA_BASE_URL="https://<resource>.openai.azure.com/..."
+#
+# Or use Azure Key Vault CSI driver (recommended for enterprise):
+#   https://learn.microsoft.com/en-us/azure/aks/csi-secrets-store-driver
+apiVersion: v1
+kind: Secret
+metadata:
+  name: project_name-secrets
+  namespace: project_name
+type: Opaque
+# stringData values are base64-encoded automatically by kubectl
+# DO NOT fill in real values here — use `kubectl create secret` above
+stringData: {}

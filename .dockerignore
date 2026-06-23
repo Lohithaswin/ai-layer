@@ -1,0 +1,55 @@
+# ============================================================
+# PROJECT_NAME Bot — .dockerignore
+# ============================================================
+# Keeps Docker build context lean — excludes data, secrets,
+# node_modules, and dev artifacts from the image.
+
+# Virtual environments
+.venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node / Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Data (large BM25 index + ChromaDB — must be mounted or re-generated)
+data/
+
+# Secrets — NEVER bake into image
+.env
+.env.*
+
+# Dev/test files
+tests/
+scripts/test_*.py
+full_test_suite.py
+test_bot.py
+test_nlp_improvements.py
+full_test_results.json
+test_results.json
+debug_*.py
+debug_*.txt
+*.log
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Docs
+docs/
+*.docx
+*.xlsx
+*.md
+
+# Scratch
+scratch/
