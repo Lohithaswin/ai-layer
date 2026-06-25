@@ -527,41 +527,82 @@ class PostgreSQLStore:
             conn.close()
 
     def get_role_attribute_names(self) -> list[str]:
-        """Return all distinct attribute names from role_mappings for the section search bar."""
+        """Return all distinct attribute names AND role names from role_mappings
+        for the section search bar dropdown.
+        Returns attributes first, then roles — both are searchable.
+        """
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT DISTINCT attribute_name FROM role_mappings ORDER BY attribute_name ASC;")
-                return [row[0] for row in cur.fetchall() if row[0]]
+                cur.execute("SELECT DISTINCT attribute_name FROM role_mappings WHERE attribute_name IS NOT NULL ORDER BY attribute_name ASC;")
+                attrs = [row[0] for row in cur.fetchall() if row[0]]
+                cur.execute("SELECT DISTINCT role_name FROM role_mappings WHERE role_name IS NOT NULL ORDER BY role_name ASC;")
+                roles = [row[0] for row in cur.fetchall() if row[0]]
+                return attrs + roles
         except Exception:
             return []
         finally:
             conn.close()
 
-    def get_attribute_details(self, attribute_name: str) -> dict:
-        """Return role name, class, class_id and group for a selected attribute (for the section search bar)."""
+    def get_attribute_details(self, selection: str) -> dict:
+        """Return details for a selected item (either a Role or an Attribute) from the section search bar."""
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
+                # First, see if this selection is a Role
                 cur.execute("""
-                    SELECT DISTINCT role_name, class_name, class_id, group_name
+                    SELECT DISTINCT attribute_name, group_name, description
+                    FROM role_mappings
+                    WHERE role_name = %s
+                    ORDER BY group_name, attribute_name;
+                """, (selection,))
+                role_rows = cur.fetchall()
+
+                if role_rows:
+                    output_parts = [f"**Role Details: {selection}**\n"]
+                    output_parts.append(f"Has {len(role_rows)} attribute(s):")
+                    for attr_name, grp, desc in role_rows:
+                        output_parts.append(f"- **{attr_name}**")
+                        if grp:
+                            output_parts.append(f"  - **Group:** {grp}")
+                        if desc:
+                            output_parts.append(f"  - **Description:** {desc}")
+                        output_parts.append("")
+                    return {"content": "\n".join(output_parts)}
+
+                # If not a Role, see if it is an Attribute
+                cur.execute("""
+                    SELECT DISTINCT role_name, group_name, description, class_name, class_id
                     FROM role_mappings
                     WHERE attribute_name = %s
                     ORDER BY role_name;
-                """, (attribute_name,))
-                rows = cur.fetchall()
-                if not rows:
-                    return {"content": f"No details found for attribute '{attribute_name}'."}
-                output_parts = [f"**Attribute Details: {attribute_name}**\n"]
-                for rname, cls, cls_id, grp in rows:
-                    output_parts.append(f"- **Role Name:** {rname}")
-                    output_parts.append(f"  - **Class:** {cls or 'N/A'}")
-                    output_parts.append(f"  - **Class ID:** {cls_id or 'N/A'}")
-                    output_parts.append(f"  - **Role Attr Group:** {grp or 'N/A'}")
-                    output_parts.append("")
-                return {"content": "\n".join(output_parts)}
+                """, (selection,))
+                attr_rows = cur.fetchall()
+
+                if attr_rows:
+                    # Description and Group should be the same across all roles for this attribute
+                    # but we can just grab the first one that is not null
+                    common_desc = next((row[2] for row in attr_rows if row[2]), None)
+                    common_grp = next((row[1] for row in attr_rows if row[1]), None)
+
+                    output_parts = [f"**Attribute Details: {selection}**\n"]
+                    if common_grp:
+                        output_parts.append(f"**Group:** {common_grp}")
+                    if common_desc:
+                        output_parts.append(f"**Description:** {common_desc}")
+                    output_parts.append(f"\nAssigned to {len(attr_rows)} Role(s):")
+
+                    for rname, grp, desc, cls, cls_id in attr_rows:
+                        output_parts.append(f"- **{rname}**")
+                        if cls:
+                            output_parts.append(f"  - **Class:** {cls}")
+                        if cls_id:
+                            output_parts.append(f"  - **Class ID:** {cls_id}")
+                    return {"content": "\n".join(output_parts)}
+
+                return {"content": f"No details found for '{selection}' in the role database."}
         except Exception as e:
-            return {"content": f"Error retrieving attribute: {str(e)}"}
+            return {"content": f"Error retrieving details: {str(e)}"}
         finally:
             conn.close()
 

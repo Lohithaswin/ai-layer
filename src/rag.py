@@ -402,7 +402,8 @@ def _try_role_sql_direct(
     """
     from src.intent_router import route_role_intent
 
-    router_result = route_role_intent(question.lower())
+    router_result = route_role_intent(question)   # keep original casing — ILIKE handles case on DB side
+
     sql_intent = router_result["intent"]
     entity     = router_result["entity"]
 
@@ -413,22 +414,51 @@ def _try_role_sql_direct(
     try:
         if sql_intent == "GET_ATTRIBUTES_FOR_ROLE" and hasattr(store, "get_attributes_for_role"):
             sql_answer = store.get_attributes_for_role(entity)
+
         elif sql_intent == "GET_ROLES_FOR_ATTRIBUTE" and hasattr(store, "get_roles_for_attribute"):
             sql_answer = store.get_roles_for_attribute(entity)
+
         elif sql_intent == "COUNT_ATTRIBUTES" and hasattr(store, "count_role_attributes"):
             sql_answer = store.count_role_attributes(entity)
+
         elif sql_intent == "DESCRIBE_ATTRIBUTE" and hasattr(store, "describe_attribute"):
             sql_answer = store.describe_attribute(entity)
+            # "Describe X" may refer to a role, not an attribute — try role lookup as fallback
+            if not sql_answer and hasattr(store, "get_attributes_for_role"):
+                sql_answer = store.get_attributes_for_role(entity)
 
-        # If specialised method returned nothing, fall back to general DB search
+        elif sql_intent == "GENERAL_ROLE_SEARCH" and hasattr(store, "query_role_database"):
+            # A role question that didn't match specific intents; search keywords directly
+            sql_answer = store.query_role_database([entity])
+
+        # Final fallback — general keyword search across all role_mappings
         if not sql_answer and hasattr(store, "query_role_database"):
             sql_answer = store.query_role_database([entity])
+
+        # If still nothing, return a clean "not found" answer instead of
+        # sending the query to the LLM (which would hit rate limits and use
+        # doc chunks that have nothing to do with role data)
+        if not sql_answer:
+            return ChatResponse(
+                answer=f"No role or attribute matching **'{entity}'** was found in the PROJECT_NAME role database.\n\n"
+                       f"Try:\n- Checking the exact role name spelling\n"
+                       f"- Using the section search bar to browse all roles and attributes",
+                sources=[],
+                used_llm=False,
+                note="role_not_found",
+                processing_time_ms=(time.time() - start_time) * 1000,
+                retrieval_time_ms=retrieval_time,
+                num_sources_retrieved=0,
+                num_sources_used=0,
+                question_intent=sql_intent.lower(),
+                retrieval_mode="sql_direct",
+                options=[],
+            )
+
     except Exception as e:
         print(f"[RAG] role SQL direct failed ({sql_intent}, '{entity}'): {e}")
-        return None  # fall through to LLM
+        return None  # fall through to LLM only on unexpected error
 
-    if not sql_answer:
-        return None  # DB had nothing — let LLM try
 
     total_time = (time.time() - start_time) * 1000
     return ChatResponse(

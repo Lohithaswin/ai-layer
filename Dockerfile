@@ -2,7 +2,7 @@
 # Document Intelligence Bot Bot — Production Dockerfile
 # ============================================================
 # Multi-stage build:
-#   Stage 1 (builder): install C extensions for psycopg2, etc.
+#   Stage 1 (builder): install C extensions for psycopg2, pyodbc, etc.
 #   Stage 2 (runtime): lean runtime image, non-root user
 # ============================================================
 
@@ -11,11 +11,21 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-# System deps for psycopg2 (libpq) and sentence-transformers
+# System deps for psycopg2 (libpq), pyodbc (unixodbc), and sentence-transformers
+# Also installs Microsoft ODBC Driver 17 for SQL Server (needed by pyodbc at build time)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg \
+    apt-transport-https \
     libpq-dev \
     gcc \
     g++ \
+    unixodbc-dev \
+    && curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+       > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql17 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -32,9 +42,21 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Runtime-only system dependency (libpq)
+# Runtime system dependencies:
+#   libpq5          — PostgreSQL client lib
+#   unixodbc        — ODBC runtime
+#   msodbcsql17     — Microsoft SQL Server ODBC Driver 17 (for live PROJECT_NAME DB queries)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg \
+    apt-transport-https \
     libpq5 \
+    unixodbc \
+    && curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+       > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql17 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages and pre-downloaded model from builder
@@ -44,6 +66,7 @@ COPY --from=builder /root/.cache /root/.cache
 # Copy application source (exclude data/, .env, node_modules via .dockerignore)
 COPY api.py .
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 
 # Non-root user for security
 RUN useradd -m -u 1001 project_name && chown -R project_name:project_name /app

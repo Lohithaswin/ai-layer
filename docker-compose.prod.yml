@@ -72,7 +72,9 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── Nightly Ingestion Job ─────────────────────────────────
+  # ── Document Ingestion Job ────────────────────────────────
+  # Ingests release PDFs/Word docs into the vector store.
+  # Run on demand: docker compose -f docker-compose.prod.yml --profile ingest up ingest
   ingest:
     build:
       context: .
@@ -82,8 +84,7 @@ services:
     restart: "no"               # runs once, then exits
     command: >
       sh -c "
-        python -m src.ingest_batch &&
-        python -m src.role_ingestor
+        python -m src.ingest_batch
       "
     env_file:
       - .env
@@ -96,6 +97,38 @@ services:
         condition: service_healthy
     profiles:
       - ingest                  # only runs when: docker compose --profile ingest up
+
+  # ── Role Attribute Sync Job (MSSQL → PostgreSQL) ──────────
+  # Pulls role/attribute data live from the PROJECT_NAME SQL Server and
+  # upserts it into the local PostgreSQL role_mappings table.
+  #
+  # Run manually:
+  #   docker compose -f docker-compose.prod.yml --profile sync up role-sync
+  #
+  # Schedule via cron on the host (recommended — run nightly):
+  #   0 2 * * * docker compose -f /path/to/docker-compose.prod.yml --profile sync up role-sync
+  role-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: project_name-bot-api:latest
+    container_name: project_name-role-sync
+    restart: "no"               # runs once, then exits
+    command: >
+      sh -c "python scripts/sync_roles_from_mssql.py"
+    env_file:
+      - .env
+    environment:
+      - ROLE_DATA_SOURCE=mssql
+      - MSSQL_DRIVER=ODBC Driver 17 for SQL Server   # modern driver available in container
+    volumes:
+      - project_name-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - sync                    # only runs when: docker compose --profile sync up
+
 
 volumes:
   pgdata:

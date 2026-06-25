@@ -2,13 +2,16 @@
 
 An enterprise-grade, layout-aware **Retrieval-Augmented Generation (RAG)** system designed for YourOrganization to ingest, parse, search, and answer technical questions from YOUR_PRODUCT manuals, SFS release documents, and Role Attribute matrices — with exact page-level citations and a relational SQL layer for 100% accurate role/attribute queries.
 
+> 📚 **Looking for the Total Guide?** See the [Developer & Administrator Guide](DEVELOPER_GUIDE.md) for a deep dive into the architecture, automated MSSQL syncing procedures, and the roadmap for future enterprise expansion.
+
 ---
 
 ## ✨ What This System Does
 
 - **Chat with your PDFs** — Ask any question about YOUR_PRODUCT, MFA, SFS, PKI, LDAP and get sourced answers with page references
 - **Role Attributes Matrix** — Any role/attribute query is intercepted **before the LLM** and answered directly from PostgreSQL — zero hallucination, zero latency
-- **Section Search Bar** — Click any Role Attribute name to instantly see which classes, groups, and roles are assigned to it
+- **Automated MSSQL Sync** — Role definitions are automatically pulled from the live PROJECT_NAME SQL Server via a lightweight RDP Sync API
+- **Section Search Bar** — Click any Role or Attribute name to instantly see its description, classes, groups, and assigned roles
 - **Streaming Responses** — Answers stream token-by-token via SSE for a fast, responsive feel
 - **Follow-Up Awareness** — Pronouns ("it", "that"), affirmations ("yes"), and vague references ("how do I do that?") are resolved from conversation history
 - **Clarification System** — Vague or incomplete queries trigger a clarification prompt instead of guessing
@@ -62,19 +65,22 @@ ai layer/
 ├── src/
 │   ├── config.py                 # All env vars, model names, limits
 │   ├── postgres_store.py         # pgvector dense store + role SQL methods (deduplicated)
-│   ├── intent_router.py          # Zero-cost local regex intent router
+│   ├── intent_router.py          # Zero-cost local regex intent router (LLM bypass)
 │   ├── rag.py                    # RAG pipeline — includes _try_role_sql_direct() shortcut
 │   ├── retrieval.py              # Hybrid search orchestration
 │   ├── llm.py                    # Groq LLM integration (token-budget aware)
 │   ├── llm_stream.py             # Streaming LLM response handler
 │   ├── ingest_batch.py           # Parallel PDF ingestion
-│   ├── ingest_roles.py           # Excel Role Attributes → role_mappings SQL table
-│   ├── watcher.py                # File watcher for incremental ingestion (run at night)
 │   ├── query_router.py           # Intent detection + product routing
 │   ├── query_context.py          # Follow-up resolution + affirmation rewriter
 │   ├── context_focus.py          # Page-collapse for dense procedural answers
 │   ├── answer_formatter.py       # Post-processing + boilerplate strip
 │   └── verifier.py               # Answer grounding verifier
+├── scripts/
+│   ├── role_sync_api.py          # RDP FastAPI server (exposes MSSQL data locally)
+│   ├── setup_sync_api_task.ps1   # Registers the RDP Sync API on Windows boot
+│   ├── sync_roles_from_api.py    # Laptop client (fetches from RDP API -> PostgreSQL)
+│   └── nightly_ingest.ps1        # Master ingest script (Docs + Roles via API)
 ├── requirements.txt
 ├── docker-compose.prod.yml       # Production Tier 1 deployment (Single VM)
 ├── Dockerfile                    # Multi-stage production container build
@@ -97,9 +103,10 @@ The function `_try_role_sql_direct()` in `src/rag.py` intercepts role/attribute 
 | `"list all attrs for [role]"` | `GET_ATTRIBUTES_FOR_ROLE` | `get_attributes_for_role()` |
 | `"what roles have [attribute]?"` | `GET_ROLES_FOR_ATTRIBUTE` | `get_roles_for_attribute()` |
 | `"how many attributes does [role] have?"` | `COUNT_ATTRIBUTES` | `count_role_attributes()` |
-| `"describe [attribute]"` | `DESCRIBE_ATTRIBUTE` | `describe_attribute()` |
+| `"describe [attribute]"` | `DESCRIBE_ATTRIBUTE` | `describe_attribute()` / fallback to role |
+| *Any unstructured mention of roles* | `GENERAL_ROLE_SEARCH` | `query_role_database()` |
 
-**Result:** < 1 second responses, zero Groq API calls, zero 413 errors, zero hallucination.
+**Result:** < 1 second responses, zero Groq API calls, zero 413 errors, zero hallucination. All role questions bypass the LLM and the VectorStore entirely.
 
 ### 2. Deduplicated SQL Results
 
@@ -158,12 +165,11 @@ docker-compose up -d
 
 ### 3. Ingest Documents *(run once, then nightly)*
 
-```powershell
-# Ingest PDFs and Word docs into pgvector
-python -m src.ingest_batch
+We use an automated pipeline for both PDFs and live MSSQL role data. The role data relies on `role_sync_api.py` running on the RDP server to bypass corporate firewall restrictions.
 
-# Ingest Role Attributes Excel → role_mappings SQL table
-python src/ingest_roles.py
+```powershell
+# Run the master ingest script (updates VectorStore docs + Postgres roles)
+.\scripts\nightly_ingest.ps1
 ```
 
 ### 4. Start the Backend API
