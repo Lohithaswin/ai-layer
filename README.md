@@ -327,7 +327,10 @@ The watcher is **disabled** during bot runtime to prevent slowdowns. Run ingesti
 
 ## 🏢 Production Deployment
 
-> ⚠️ Groq free/paid tier is suitable for development only. For production with confidential documents:
+> ⚠️ **IMPORTANT: Current Demo State**
+> The system currently uses the Groq free tier API temporarily for demonstration purposes. This is strictly for development and testing.
+
+For making the system production-ready with confidential documents, you must migrate to a secure LLM provider:
 
 | Option | Recommendation |
 |---|---|
@@ -335,8 +338,8 @@ The watcher is **disabled** during bot runtime to prevent slowdowns. Run ingesti
 | **On-prem Ollama** | ✅ Most secure — zero internet, air-gapped, no data leaves building |
 | **Groq Paid** | ⚠️ Development/demo only — data leaves network |
 
-### How to Switch to Azure OpenAI
-If you obtain an Azure OpenAI Studio API Key, you do not need to rewrite any code. The application uses `httpx` and `openai` compliant paths. Just update your `.env` file:
+### How to Switch to Azure OpenAI Studio
+When you are ready to make the system production-ready, you must add your Azure OpenAI Studio API key. Because the application uses `httpx` and `openai` compliant paths, you do not need to rewrite any code. Just update your `.env` file with the new endpoint:
 
 ```env
 # 1. Your Azure OpenAI API Key
@@ -357,9 +360,9 @@ OLLAMA_MODEL=gpt-4o-mini
 
 ---
 
-## 🚀 Future Improvements
+## 🚀 Future Expansion & Improvements
 
-While the core RAG engine is fully robust, these improvements are recommended before a Tier 2 Enterprise rollout:
+To make the application fully robust and production-ready for a Tier 2 Enterprise rollout, the following future expansions must be implemented:
 
 1. **Azure Active Directory (Entra ID) Authentication**: 
    - Integrate MSAL (Microsoft Authentication Library) in the React frontend.

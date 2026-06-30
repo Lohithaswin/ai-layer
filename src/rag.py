@@ -392,11 +392,21 @@ def _try_role_sql_direct(
     retrieval_time: float,
     intent: str,
     mode: str,
+    product_filter: str | None = None,
 ) -> "ChatResponse | None":
     """
     Shortcut: if the question is a role/attribute relational query,
     answer it directly from the SQL DB — NO LLM call, no token limits,
     no 413 errors, instant and accurate.
+
+    Gating logic:
+    - Specific structured intents (GET_ATTRIBUTES_FOR_ROLE, GET_ROLES_FOR_ATTRIBUTE,
+      COUNT_ATTRIBUTES) always bypass the LLM — they are unambiguous.
+    - Ambiguous intents (DESCRIBE_ATTRIBUTE, GENERAL_ROLE_SEARCH) only route to the
+      role DB when the user has explicitly selected the "Roles" filter in the UI
+      (product_filter == 'roles'). Otherwise they fall through to the normal
+      document search so general queries like "compare FAT and SAT format" are
+      answered from the PDFs, not the role database.
 
     Returns a ChatResponse if handled, or None to fall through to the LLM.
     """
@@ -409,6 +419,13 @@ def _try_role_sql_direct(
 
     if sql_intent == "GENERAL_SEARCH" or not entity:
         return None  # not a role query — let LLM handle it
+
+    # Ambiguous intents: only hit the role DB if the user explicitly chose
+    # the Roles filter. Otherwise fall through to normal document retrieval.
+    _AMBIGUOUS_INTENTS = {"DESCRIBE_ATTRIBUTE", "GENERAL_ROLE_SEARCH"}
+    _roles_filter_active = (product_filter or "").lower() in ("roles", "role")
+    if sql_intent in _AMBIGUOUS_INTENTS and not _roles_filter_active:
+        return None
 
     sql_answer = ""
     try:
@@ -511,6 +528,7 @@ def ask(
         retrieval_time=0.0,
         intent="general",
         mode="sql_direct",
+        product_filter=product_filter,
     )
     if _role_resp is not None:
         return _role_resp
