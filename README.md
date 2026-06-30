@@ -190,6 +190,70 @@ Open **http://localhost:5174** (or `5173` depending on port availability).
 
 ---
 
+## 🛠️ Developer Guide & Contributing Workflow
+
+To help future engineers navigate, debug, and expand this repository, here is a complete guide to the development workflow.
+
+### 1. Technology Stack Overview
+- **Backend**: Python 3.11+, FastAPI (REST and SSE streaming), `psycopg2` (PostgreSQL), `pgvector` (vector similarity search).
+- **Frontend**: React 19, Vite, Lucide React (for icons).
+- **LLM Engine**: Groq (Llama 3.1 8b-instant) integrated via custom `llm.py` and `llm_stream.py` wrappers.
+- **Data Sync Pipeline**: MS SQL via RDP proxy API → PostgreSQL.
+
+### 2. Modifying the Backend Core Logic
+The intelligence of the RAG system is housed in the `src/` directory. If you are modifying how the chatbot thinks, retrieves, or answers, look here:
+- **`src/intent_router.py`**: Start here if you want to add new "Zero-Cost" SQL bypass rules (e.g., matching a new regex pattern to bypass the LLM entirely).
+- **`src/rag.py`**: The main orchestration pipeline. It decides whether to route to SQL directly or perform a hybrid search.
+- **`src/retrieval.py`**: Modifies the Hybrid Search weights (Dense pgvector + Sparse BM25) or the Reranker (BAAI/bge-reranker-base).
+- **`api.py`**: Add new FastAPI REST endpoints here. Ensure you follow the SSE (Server-Sent Events) pattern for streaming endpoints.
+
+### 3. Modifying the Frontend UI
+The UI is a single-page React application built with Vite.
+- **Location**: `frontend/src/ChatUI.jsx` contains the main interface.
+- **Dependencies**: React 19 and `lucide-react` for icons.
+- **Streaming State**: The frontend handles token-by-token streaming via the `fetch` API and a `ReadableStream` reader. If you modify the backend streaming format in `api.py`, ensure `ChatUI.jsx` is updated to parse it correctly.
+
+### 4. Running the Test Suite
+Before committing any changes to the RAG logic or API, you must ensure you haven't broken the deterministic SQL lookups or general Q&A parsing.
+The repository includes a comprehensive test suite covering 46+ edge cases.
+```powershell
+# Ensure the backend (api.py) is running on port 8000 first!
+.\.venv\Scripts\python.exe full_test_suite.py
+```
+This will output a live test run to the terminal and generate a `full_test_results.json` artifact for review.
+
+### 5. Debugging Tips
+- **Role Queries Failing?**: Check the live Sync API on the RDP server. The firewall might be blocking port 8765. (See `scripts/role_sync_api.py`)
+- **LLM Rate Limits (429) or Payload Too Large (413)?**: Adjust the `MAX_CONTEXT_CHARS` in `.env`. The backend `llm.py` dynamically calculates budgets, but oversized parent chunks can still push it to the edge.
+
+### 6. Adding New Documents to the Knowledge Base
+To add new manuals or procedural guides for the bot to read:
+1. Place the new PDFs in the `docs/` directory.
+2. Run the `.\scripts\nightly_ingest.ps1` script to chunk, embed, and index them into PostgreSQL. Note that incremental ingestion is CPU-heavy and should ideally be done when the bot is not under heavy load (e.g., via a scheduled nightly task).
+
+### 7. MSSQL Database Role Sync Setup
+Because corporate firewalls block direct connection from your developer laptop to the live PROJECT_NAME MSSQL server, we use a lightweight proxy API. Follow these steps to set up the data import:
+
+**On the MSSQL Server (RDP Machine):**
+1. Log into the server via RDP.
+2. Run the proxy API to expose the MSSQL data:
+   ```cmd
+   python scripts\role_sync_api.py
+   ```
+   *(This starts a FastAPI server on port 8765. To make this persistent on boot, run `powershell -ExecutionPolicy Bypass -File scripts\setup_sync_api_task.ps1` as an Administrator).*
+
+**On your Local Laptop (Dev Environment):**
+1. Ensure your local `.env` has a `SYNC_API_KEY` that matches the server's `.env`.
+2. Run the sync script to pull the data from the server's proxy API into your local PostgreSQL:
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\sync_roles_from_api.py
+   ```
+   *(Note: This is automatically executed if you run the master `.\scripts\nightly_ingest.ps1` script).*
+
+> 📚 **Deep Dive:** For profound architectural changes, Kubernetes manifests (`k8s/`), and Azure DevOps CI/CD details, always refer to the [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+
+---
+
 ## 🔒 Security Configuration
 
 For local development vs. production, the `.env` file uses these secure defaults:
