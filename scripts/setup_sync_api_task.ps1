@@ -11,11 +11,11 @@
 
 $ErrorActionPreference = "Stop"
 
-# ── Config — adjust if Python is in a different location ─────────────────────
-$TaskName   = "PROJECT_NAME-RoleSyncAPI"
-$ScriptPath = "$env:USERPROFILE\role_sync_api.py"
+# ── Config — adjust these paths to match your server environment ──────────────
+$TaskName   = "RoleSyncAPI"
+$ScriptPath = "$env:USERPROFILE\\role_sync_api.py"   # adjust to where you placed the script
 $PythonExe  = "python"   # assumes Python is on PATH; change to full path if needed
-$LogDir     = "$env:USERPROFILE\logs"
+$LogDir     = "$env:USERPROFILE\\logs"
 $Port       = 8765
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
