@@ -1,0 +1,134 @@
+[
+  {
+    "role_name": "Admin",
+    "attribute_name": "DataClass1",
+    "group_name": "DataClass",
+    "structured_name": "Conf_DataClass_DataClass1",
+    "description": "Able to access data elements with classification 1 (Basic Data).",
+    "role_description": "System Administrator with full data access.",
+    "is_high_risk": true,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "Admin",
+    "attribute_name": "DataClass2",
+    "group_name": "DataClass",
+    "structured_name": "Conf_DataClass_DataClass2",
+    "description": "Able to access data elements with classification 2 (Intermediate Data).",
+    "role_description": "System Administrator with full data access.",
+    "is_high_risk": true,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "Admin",
+    "attribute_name": "UserMgmt_Create",
+    "group_name": "UserManagement",
+    "structured_name": "Conf_UserMgmt_Create",
+    "description": "Able to create new user accounts in the system.",
+    "role_description": "System Administrator with full data access.",
+    "is_high_risk": true,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "Operator",
+    "attribute_name": "DataClass1",
+    "group_name": "DataClass",
+    "structured_name": "Conf_DataClass_DataClass1",
+    "description": "Able to access data elements with classification 1 (Basic Data).",
+    "role_description": "Standard operator with read-level access.",
+    "is_high_risk": false,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "Operator",
+    "attribute_name": "Report_View",
+    "group_name": "Reporting",
+    "structured_name": "Conf_Report_View",
+    "description": "Able to view and export standard system reports.",
+    "role_description": "Standard operator with read-level access.",
+    "is_high_risk": false,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "Auditor",
+    "attribute_name": "Audit_Read",
+    "group_name": "AuditLog",
+    "structured_name": "Conf_Audit_Read",
+    "description": "Read-only access to the audit log entries.",
+    "role_description": "Compliance auditor with read-only audit access.",
+    "is_high_risk": false,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "Auditor",
+    "attribute_name": "Report_View",
+    "group_name": "Reporting",
+    "structured_name": "Conf_Report_View",
+    "description": "Able to view and export standard system reports.",
+    "role_description": "Compliance auditor with read-only audit access.",
+    "is_high_risk": false,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "ReadOnly",
+    "attribute_name": "DataClass1",
+    "group_name": "DataClass",
+    "structured_name": "Conf_DataClass_DataClass1",
+    "description": "Able to access data elements with classification 1 (Basic Data).",
+    "role_description": "Read-only user with minimal access.",
+    "is_high_risk": false,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "ReadOnly",
+    "attribute_name": "Report_View",
+    "group_name": "Reporting",
+    "structured_name": "Conf_Report_View",
+    "description": "Able to view and export standard system reports.",
+    "role_description": "Read-only user with minimal access.",
+    "is_high_risk": false,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "SecurityAdmin",
+    "attribute_name": "UserMgmt_Create",
+    "group_name": "UserManagement",
+    "structured_name": "Conf_UserMgmt_Create",
+    "description": "Able to create new user accounts in the system.",
+    "role_description": "Security administrator managing user access.",
+    "is_high_risk": true,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "SecurityAdmin",
+    "attribute_name": "UserMgmt_Delete",
+    "group_name": "UserManagement",
+    "structured_name": "Conf_UserMgmt_Delete",
+    "description": "Able to delete or deactivate user accounts.",
+    "role_description": "Security administrator managing user access.",
+    "is_high_risk": true,
+    "role_status": 0,
+    "attr_is_active": true
+  },
+  {
+    "role_name": "SecurityAdmin",
+    "attribute_name": "Audit_Read",
+    "group_name": "AuditLog",
+    "structured_name": "Conf_Audit_Read",
+    "description": "Read-only access to the audit log entries.",
+    "role_description": "Security administrator managing user access.",
+    "is_high_risk": false,
+    "role_status": 0,
+    "attr_is_active": true
+  }
+]

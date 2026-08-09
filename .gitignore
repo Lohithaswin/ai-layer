@@ -6,12 +6,13 @@
 __pycache__/
 *.pyc
 
-# Chroma
+# Chroma / vector store data
 data/chroma/
 data/bm25_index.pkl
 
-# Environment
+# Environment — NEVER commit secrets
 .env
+.env.local
 
 # Node
 node_modules/
@@ -25,8 +26,43 @@ frontend/dist/
 *.log
 logs/
 
-# Documents (optional)
+# Documents — never commit real docs to git
 docs/
+documents/
+*.pdf
 
-# Nightly ingest queue (runtime-generated, not for git)
+# ─────────────────────────────────────────────────────────────
+# SECURITY: Block accidental commits of sensitive file types
+# ─────────────────────────────────────────────────────────────
+# Office documents (may contain confidential data)
+*.xlsx
+*.xls
+*.docx
+*.doc
+*.pptx
+*.ppt
+
+# Database dumps and exports
+*_export.json
+*_dump.json
+*_dump.txt
+*_dump.sql
+*.sql
+roles_export.json
+
+# Test result artifacts (generated at runtime, may contain real data)
+full_test_results.json
+test_results.json
+*_results.json
+
+# Debug outputs (may capture real query/response data)
+debug_out.txt
+debug_*.txt
+debug_*.json
+
+# Nightly ingest queue (runtime-generated)
 data/pending_ingest.json
+
+# Scratch and temp files
+scratch/
+*.tmp

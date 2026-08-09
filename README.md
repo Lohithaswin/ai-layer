@@ -1,6 +1,6 @@
-# Document Intelligence Assistant — YOUR_PRODUCT RAG Chatbot
+# Document Intelligence Assistant — RAG Chatbot
 
-An enterprise-grade, layout-aware **Retrieval-Augmented Generation (RAG)** system designed for YourOrganization to ingest, parse, search, and answer technical questions from YOUR_PRODUCT manuals, SFS release documents, and Role Attribute matrices — with exact page-level citations and a relational SQL layer for 100% accurate role/attribute queries.
+An enterprise-grade, layout-aware **Retrieval-Augmented Generation (RAG)** system designed to ingest, parse, search, and answer technical questions from product manuals, release documents, and Role Attribute matrices — with exact page-level citations and a relational SQL layer for 100% accurate role/attribute queries.
 
 > 📚 **Looking for the Total Guide?** See the [Developer & Administrator Guide](DEVELOPER_GUIDE.md) for a deep dive into the architecture, automated MSSQL syncing procedures, and the roadmap for future enterprise expansion.
 
@@ -8,9 +8,9 @@ An enterprise-grade, layout-aware **Retrieval-Augmented Generation (RAG)** syste
 
 ## ✨ What This System Does
 
-- **Chat with your PDFs** — Ask any question about YOUR_PRODUCT, MFA, SFS, PKI, LDAP and get sourced answers with page references
+- **Chat with your PDFs** — Ask any question about your product documentation and get sourced answers with page references
 - **Role Attributes Matrix** — Any role/attribute query is intercepted **before the LLM** and answered directly from PostgreSQL — zero hallucination, zero latency
-- **Automated MSSQL Sync** — Role definitions are automatically pulled from the live PROJECT_NAME SQL Server via a lightweight RDP Sync API
+- **Automated MSSQL Sync** — Role definitions are automatically pulled from a live SQL Server via a lightweight RDP Sync API
 - **Section Search Bar** — Click any Role or Attribute name to instantly see its description, classes, groups, and assigned roles
 - **Streaming Responses** — Answers stream token-by-token via SSE for a fast, responsive feel
 - **Follow-Up Awareness** — Pronouns ("it", "that"), affirmations ("yes"), and vague references ("how do I do that?") are resolved from conversation history
@@ -46,7 +46,7 @@ Intent Router (local regex, 0ms, no API call)
          BGE Reranker (BAAI/bge-reranker-base)
               │
               ▼
-         Groq LLM — llama-3.1-8b-instant (streaming)
+         LLM — llama-3.1-8b-instant (streaming)
               │
               ▼
          React Chat UI
@@ -59,7 +59,7 @@ Intent Router (local regex, 0ms, no API call)
 ## 📁 File Structure
 
 ```
-ai layer/
+ai-layer/
 ├── api.py                        # FastAPI backend — REST + SSE streaming endpoints
 ├── frontend/src/ChatUI.jsx       # React chat interface with streaming + section search
 ├── src/
@@ -68,7 +68,7 @@ ai layer/
 │   ├── intent_router.py          # Zero-cost local regex intent router (LLM bypass)
 │   ├── rag.py                    # RAG pipeline — includes _try_role_sql_direct() shortcut
 │   ├── retrieval.py              # Hybrid search orchestration
-│   ├── llm.py                    # Groq LLM integration (token-budget aware)
+│   ├── llm.py                    # LLM integration (token-budget aware)
 │   ├── llm_stream.py             # Streaming LLM response handler
 │   ├── ingest_batch.py           # Parallel PDF ingestion
 │   ├── query_router.py           # Intent detection + product routing
@@ -79,15 +79,17 @@ ai layer/
 ├── scripts/
 │   ├── role_sync_api.py          # RDP FastAPI server (exposes MSSQL data locally)
 │   ├── setup_sync_api_task.ps1   # Registers the RDP Sync API on Windows boot
-│   ├── sync_roles_from_api.py    # Laptop client (fetches from RDP API -> PostgreSQL)
+│   ├── sync_roles_from_api.py    # Client script (fetches from RDP API -> PostgreSQL)
 │   └── nightly_ingest.ps1        # Master ingest script (Docs + Roles via API)
+├── data/
+│   └── sample_roles.json         # Sample role data for testing (anonymized)
 ├── requirements.txt
-├── docker-compose.prod.yml       # Production Tier 1 deployment (Single VM)
+├── docker-compose.prod.yml       # Production deployment (Single VM)
 ├── Dockerfile                    # Multi-stage production container build
 ├── k8s/                          # Kubernetes (AKS) deployment manifests
-├── .github/workflows/deploy.yml  # CI/CD pipeline for GitHub/Azure DevOps
-├── .env.production               # Secure production environment template
-└── .env                          # API keys and config (do NOT commit)
+├── .github/workflows/deploy.yml  # CI/CD pipeline
+├── .env.production               # Production environment template
+└── .env.example                  # Development environment template (copy to .env)
 ```
 
 ---
@@ -106,7 +108,7 @@ The function `_try_role_sql_direct()` in `src/rag.py` intercepts role/attribute 
 | `"describe [attribute]"` | `DESCRIBE_ATTRIBUTE` | `describe_attribute()` / fallback to role |
 | *Any unstructured mention of roles* | `GENERAL_ROLE_SEARCH` | `query_role_database()` |
 
-**Result:** < 1 second responses, zero Groq API calls, zero 413 errors, zero hallucination. All role questions bypass the LLM and the VectorStore entirely.
+**Result:** < 1 second responses, zero LLM API calls, zero 413 errors, zero hallucination. All role questions bypass the LLM and the VectorStore entirely.
 
 ### 2. Deduplicated SQL Results
 
@@ -122,7 +124,7 @@ All role SQL methods use `GROUP BY role_name, attribute_name` with `MIN()` aggre
 
 ### 4. Token-Budget Aware LLM Calls
 
-`src/llm.py` dynamically computes `max_tokens` based on prompt size to stay within the 8192-token Groq context window. Graceful fallback messages are returned instead of HTTP 500 for rate-limit (429) and payload-too-large (413) errors.
+`src/llm.py` dynamically computes `max_tokens` based on prompt size to stay within the context window. Graceful fallback messages are returned instead of HTTP 500 for rate-limit (429) and payload-too-large (413) errors.
 
 ### 5. Follow-Up & Context Resolution
 
@@ -154,7 +156,7 @@ pip install -r requirements.txt
 
 # Copy and configure environment variables
 copy .env.example .env
-# Edit .env: set GROQ_API_KEY and DB credentials
+# Edit .env: set your GROQ_API_KEY / Azure OpenAI key and DB credentials
 ```
 
 ### 2. Start PostgreSQL
@@ -197,7 +199,7 @@ To help future engineers navigate, debug, and expand this repository, here is a 
 ### 1. Technology Stack Overview
 - **Backend**: Python 3.11+, FastAPI (REST and SSE streaming), `psycopg2` (PostgreSQL), `pgvector` (vector similarity search).
 - **Frontend**: React 19, Vite, Lucide React (for icons).
-- **LLM Engine**: Groq (Llama 3.1 8b-instant) integrated via custom `llm.py` and `llm_stream.py` wrappers.
+- **LLM Engine**: Groq or Azure OpenAI, integrated via custom `llm.py` and `llm_stream.py` wrappers.
 - **Data Sync Pipeline**: MS SQL via RDP proxy API → PostgreSQL.
 
 ### 2. Modifying the Backend Core Logic
@@ -232,7 +234,7 @@ To add new manuals or procedural guides for the bot to read:
 2. Run the `.\scripts\nightly_ingest.ps1` script to chunk, embed, and index them into PostgreSQL. Note that incremental ingestion is CPU-heavy and should ideally be done when the bot is not under heavy load (e.g., via a scheduled nightly task).
 
 ### 7. MSSQL Database Role Sync Setup
-Because corporate firewalls block direct connection from your developer laptop to the live PROJECT_NAME MSSQL server, we use a lightweight proxy API. Follow these steps to set up the data import:
+Because corporate firewalls block direct connection from your developer laptop to the live MSSQL server, we use a lightweight proxy API. Follow these steps to set up the data import:
 
 **On the MSSQL Server (RDP Machine):**
 1. Log into the server via RDP.
@@ -242,7 +244,7 @@ Because corporate firewalls block direct connection from your developer laptop t
    ```
    *(This starts a FastAPI server on port 8765. To make this persistent on boot, run `powershell -ExecutionPolicy Bypass -File scripts\setup_sync_api_task.ps1` as an Administrator).*
 
-**On your Local Laptop (Dev Environment):**
+**On your Local Machine (Dev Environment):**
 1. Ensure your local `.env` has a `SYNC_API_KEY` that matches the server's `.env`.
 2. Run the sync script to pull the data from the server's proxy API into your local PostgreSQL:
    ```powershell
@@ -250,7 +252,7 @@ Because corporate firewalls block direct connection from your developer laptop t
    ```
    *(Note: This is automatically executed if you run the master `.\scripts\nightly_ingest.ps1` script).*
 
-> 📚 **Deep Dive:** For profound architectural changes, Kubernetes manifests (`k8s/`), and Azure DevOps CI/CD details, always refer to the [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+> 📚 **Deep Dive:** For profound architectural changes, Kubernetes manifests (`k8s/`), and CI/CD details, always refer to the [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
 ---
 
@@ -258,8 +260,8 @@ Because corporate firewalls block direct connection from your developer laptop t
 
 For local development vs. production, the `.env` file uses these secure defaults:
 
-- `SSL_VERIFY=false`: Used locally due to your corporate proxy SSL interception. On Azure production, set to `true` or point to a CA bundle.
-- `CORS_ORIGINS`: Restricts API access. Local defaults to `http://localhost:5173,http://localhost:5174`. Production should be `https://project_name-bot.your-company.internal`.
+- `SSL_VERIFY=false`: Used locally if behind a corporate proxy with SSL interception. On production, set to `true` or point to your CA bundle.
+- `CORS_ORIGINS`: Restricts API access. Local defaults to `http://localhost:5173,http://localhost:5174`. Production should point to your internal domain.
 - `PG_PASSWORD`: No default. Production deployments will fail to start if this is not securely configured.
 
 ---
@@ -268,16 +270,20 @@ For local development vs. production, the `.env` file uses these secure defaults
 
 | Variable | Default | Description |
 |---|---|---|
-| `GROQ_API_KEY` | — | Groq API key for LLM inference |
+| `GROQ_API_KEY` | — | LLM API key (Groq or Azure OpenAI) |
 | `PG_HOST` | `localhost` | PostgreSQL host |
 | `PG_PORT` | `5432` | PostgreSQL port |
 | `PG_DB` | `rag_db` | Database name |
 | `PG_USER` | `postgres` | Database user |
-| `PG_PASSWORD` | `password` | Database password |
-| `OLLAMA_MODEL` | `llama-3.1-8b-instant` | Groq model name |
+| `PG_PASSWORD` | — | Database password (required) |
+| `OLLAMA_MODEL` | `llama-3.1-8b-instant` | LLM model name |
 | `MAX_CONTEXT_CHARS` | `14000` | Max chars of context sent to LLM |
 | `TOP_K` | `5` | Number of vector chunks retrieved |
-| `OLLAMA_TIMEOUT` | `120` | Groq API timeout in seconds |
+| `OLLAMA_TIMEOUT` | `120` | LLM API timeout in seconds |
+| `MSSQL_SERVER` | — | SQL Server host (if using mssql mode) |
+| `MSSQL_USER` | — | SQL Server login |
+| `MSSQL_PASSWORD` | — | SQL Server password |
+| `SYNC_API_KEY` | — | Shared secret for RDP proxy API |
 
 ---
 
@@ -285,12 +291,10 @@ For local development vs. production, the `.env` file uses these secure defaults
 
 | Metric | Value |
 |---|---|
-| Total Chunks | 62,774 |
-| Total Documents | 407 files |
-| Products Indexed | 13 (project_name, project_module, mfa, sfs, pki, ldap, iam, backup, web, whitelist, wpp + 2 others) |
 | Embedding Model | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
 | Reranker | `BAAI/bge-reranker-base` |
-| Role Mappings | Loaded from Excel into `role_mappings` PostgreSQL table |
+| Storage | PostgreSQL with pgvector extension |
+| Role Mappings | Loaded from Excel or live MSSQL into `role_mappings` table |
 
 ---
 
@@ -327,27 +331,22 @@ The watcher is **disabled** during bot runtime to prevent slowdowns. Run ingesti
 
 ## 🏢 Production Deployment
 
-> ⚠️ **IMPORTANT: Current Demo State**
-> The system currently uses the Groq free tier API temporarily for demonstration purposes. This is strictly for development and testing.
-
-For making the system production-ready with confidential documents, you must migrate to a secure LLM provider:
+> ⚠️ **NOTE:** The default configuration uses Groq for quick setup. For production with confidential documents, migrate to a private LLM provider:
 
 | Option | Recommendation |
 |---|---|
-| **Azure OpenAI** | ✅ Best — data stays in Your Azure tenant, enterprise SLA, GDPR compliant |
+| **Azure OpenAI** | ✅ Best — data stays in your Azure tenant, enterprise SLA, GDPR compliant |
 | **On-prem Ollama** | ✅ Most secure — zero internet, air-gapped, no data leaves building |
-| **Groq Paid** | ⚠️ Development/demo only — data leaves network |
+| **Groq Paid** | ⚠️ Development/demo only — data leaves your network |
 
-### How to Switch to Azure OpenAI Studio
-When you are ready to make the system production-ready, you must add your Azure OpenAI Studio API key. Because the application uses `httpx` and `openai` compliant paths, you do not need to rewrite any code. Just update your `.env` file with the new endpoint:
+### How to Switch to Azure OpenAI
 
 ```env
 # 1. Your Azure OpenAI API Key
 GROQ_API_KEY=<your-azure-openai-key>
 
 # 2. Your Azure Endpoint URL
-# Must follow this format: https://<resource-name>.openai.azure.com/openai/deployments/<deployment-name>
-OLLAMA_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/gpt-4o-mini
+OLLAMA_BASE_URL=https://<resource-name>.openai.azure.com/openai/deployments/<deployment-name>
 
 # 3. Model Name (must match your Azure deployment name)
 OLLAMA_MODEL=gpt-4o-mini
@@ -356,22 +355,20 @@ OLLAMA_MODEL=gpt-4o-mini
 ### Deployment Tiers Included
 
 1. **Tier 1 (Department VM)**: Use `docker-compose.prod.yml`. It runs the backend, PostgreSQL, and a separate background ingestion job.
-2. **Tier 2 (Enterprise AKS)**: Use the `k8s/` folder. It contains a Deployment, Service, HPA (Horizontal Pod Autoscaler), and Ingress configured for Azure Application Gateway.
+2. **Tier 2 (Enterprise Kubernetes)**: Use the `k8s/` folder. It contains a Deployment, Service, HPA (Horizontal Pod Autoscaler), and Ingress configured for Azure Application Gateway.
 
 ---
 
 ## 🚀 Future Expansion & Improvements
 
-To make the application fully robust and production-ready for a Tier 2 Enterprise rollout, the following future expansions must be implemented:
-
-1. **Azure Active Directory (Entra ID) Authentication**: 
+1. **Azure Active Directory (Entra ID) Authentication**:
    - Integrate MSAL (Microsoft Authentication Library) in the React frontend.
-   - Add OAuth2 bearer token verification in FastAPI (`api.py`) to restrict bot access to authorized your employees only.
+   - Add OAuth2 bearer token verification in FastAPI (`api.py`) to restrict bot access to authorized users only.
 2. **Conversation Persistence & Analytics**:
    - Currently, chat history is held in browser memory. Add a PostgreSQL table to store chat sessions.
-   - This allows users to resume chats and gives admins a dashboard to see which questions are asked most frequently.
+   - Allows users to resume chats and gives admins a dashboard to see which questions are asked most frequently.
 3. **Application Insights / Monitoring**:
-   - Add the `azure-monitor-opentelemetry` package to automatically log API response times, LLM latency, and user errors directly to Azure Monitor.
+   - Add the `azure-monitor-opentelemetry` package to log API response times, LLM latency, and user errors to Azure Monitor.
 
 ---
 
@@ -381,19 +378,19 @@ To make the application fully robust and production-ready for a Tier 2 Enterpris
 A: Yes. The root cause was `SELECT DISTINCT` on 4 columns including `description`, which produced one row per unique description variant. Fixed using `GROUP BY role_name, attribute_name` + `MIN(description)`.
 
 **Q: Role queries were returning HTTP 500 — is this fixed?**
-A: Yes. Role queries now bypass the LLM entirely via `_try_role_sql_direct()` in `rag.py`. SQL results are returned directly in < 1 second. The Groq 413 token-limit error can no longer be triggered by role queries.
+A: Yes. Role queries now bypass the LLM entirely via `_try_role_sql_direct()` in `rag.py`. SQL results are returned directly in < 1 second. The LLM 413 token-limit error can no longer be triggered by role queries.
 
 **Q: The bot found the right document but said "I cannot find information" — why?**
 A: The context window was too small and cutting off table content. `MAX_CONTEXT_CHARS` is 14000 and the LLM system prompt explicitly instructs the model to output brief descriptions rather than claiming they are missing.
 
-**Q: Queries work for PROJECT_NAME but give wrong answers for MFA — why?**
-A: Short queries like `"mfa config"` were being treated as follow-ups to previous queries. Fixed — only explicit pronouns (`it/this/that`) now trigger follow-up resolution.
+**Q: Queries work for one product but give wrong answers for another — why?**
+A: Short queries were being treated as follow-ups to previous queries. Fixed — only explicit pronouns (`it/this/that`) now trigger follow-up resolution.
 
 **Q: Can I ask role queries without any special filter?**
-A: Yes — as of the latest update, role/attribute queries are automatically detected by the local intent router regardless of which filter is selected. The SQL shortcut fires on query content alone.
+A: Yes — role/attribute queries are automatically detected by the local intent router regardless of which filter is selected. The SQL shortcut fires on query content alone.
 
 **Q: Why is the watcher disabled during bot runtime?**
 A: Incremental ingestion is CPU/IO intensive and increases response latency. Run it nightly via Task Scheduler instead.
 
-**Q: What happens if the Groq API rate-limits us?**
+**Q: What happens if the LLM API rate-limits us?**
 A: The LLM layer now catches HTTP 429 (rate limit) and 413 (payload too large) and returns a clean, user-facing message instead of crashing with HTTP 500.
